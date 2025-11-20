@@ -110,7 +110,7 @@ df.to_csv(output_file, index=False)
 print(f"Saved dataframe with split info to: {output_file}")
 
 # now inside the data folder, move each folder to the train, val, or test folder
-sad_id_path = dataset_directory / "data"
+sad_id_path = dataset_directory / "audio"
 train_path = sad_id_path / 'train'
 val_path = sad_id_path / 'val'
 test_path = sad_id_path / 'test'

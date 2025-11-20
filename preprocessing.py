@@ -13,35 +13,39 @@ from pathlib import Path
 # Get the directory where this script is located
 SCRIPT_DIR = Path(__file__).parent
 
-
-def extract_dataset_path_from_csv_gs_path(csv_gs_path: str) -> Path:
-    """Extract dataset path from CSV GCS path."""
-    # Extract CSV filename from GCS path
-    csv_filename = Path(csv_gs_path).name
-    csv_stem = csv_filename.rsplit(".", 1)[0] if "." in csv_filename else csv_filename
-    
-    # Create dataset path: ~/gs_imports/{csv_stem}
-    home_dir = Path.home()
-    dataset_path = home_dir / "gs_imports" / csv_stem
-    
-    return dataset_path
-
-
 def run_command(cmd: list, step_name: str):
-    """Run a command and handle errors."""
+    """Run a command and handle errors. Exits immediately on any failure."""
     print(f"\n{'='*60}")
     print(f"Step: {step_name}")
     print(f"Command: {' '.join(cmd)}")
     print(f"{'='*60}\n")
     
-    result = subprocess.run(cmd, cwd=SCRIPT_DIR)
-    
-    if result.returncode != 0:
+    try:
+        result = subprocess.run(cmd, cwd=SCRIPT_DIR, check=False)
+        
+        if result.returncode != 0:
+            print(f"\n❌ Error in {step_name}")
+            print(f"Command failed with exit code {result.returncode}")
+            print(f"Pipeline stopped. Fix the error before continuing.")
+            sys.exit(1)
+        else:
+            print(f"\n✅ {step_name} completed successfully")
+            
+    except FileNotFoundError as e:
         print(f"\n❌ Error in {step_name}")
-        print(f"Command failed with exit code {result.returncode}")
+        print(f"Script not found: {e}")
+        print(f"Pipeline stopped.")
         sys.exit(1)
-    else:
-        print(f"\n✅ {step_name} completed successfully")
+    except subprocess.SubprocessError as e:
+        print(f"\n❌ Error in {step_name}")
+        print(f"Subprocess error: {e}")
+        print(f"Pipeline stopped.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Unexpected error in {step_name}")
+        print(f"Error: {e}")
+        print(f"Pipeline stopped.")
+        sys.exit(1)
 
 
 def main():
@@ -55,8 +59,9 @@ def main():
     )
     parser.add_argument(
         "--ds_gs_prefix",
-        default="music-dataset-hooktheory-audio/roformer_voice_sep_custom_sample",
-        help="GCS prefix for dataset (default: music-dataset-hooktheory-audio/roformer_voice_sep_custom_sample)",
+        required=True,
+        # default="music-dataset-hooktheory-audio/roformer_voice_sep_custom_sample",
+        help="GCS prefix for dataset",
     )
     parser.add_argument(
         "--uri_name_header",
@@ -76,42 +81,15 @@ def main():
 
     parser.add_argument(
         "--datasets_dir",
-        default="~/gs_imports",
-        help="Directory to store datasets (default: ~/gs_imports)",
-    )
-    parser.add_argument(
-        "--skip_gs_flatten",
-        action="store_true",
-        help="If set, skip flattening GCS directory structure before processing",
+        required=True,
+        # default="~/gs_imports",
+        help="Directory to store datasets)",
     )
     args = parser.parse_args()
     
     # Derive dataset_path from csv_gs_path
-    dataset_path = os.path.join(args.datasets_dir, os.path.basename(args.ds_gs_prefix))
+    dataset_path = Path(args.datasets_dir) / os.path.basename(args.ds_gs_prefix)
     dataset_path_str = str(dataset_path)
-    
-    # Step 0: Flatten GCS directory structure (optional)
-    if not args.skip_gs_flatten:
-        # Extract bucket name and prefix from ds_gs_prefix
-        # ds_gs_prefix format: "bucket-name/path/to/prefix"
-        prefix_parts = args.ds_gs_prefix.split("/", 1)
-        if len(prefix_parts) > 1:
-            gcs_bucket = prefix_parts[0]
-            gcs_prefix = prefix_parts[1] + "/" if not prefix_parts[1].endswith("/") else prefix_parts[1]
-        else:
-            # Fallback to defaults if format is unexpected
-            gcs_bucket = args.ds_gs_prefix.split("/")[0]
-            gcs_prefix = args.ds_gs_prefix.split("/")[1]
-            
-        run_command(
-            [
-                sys.executable,
-                "flatten_song_level_dir_datasets.py",
-                "--bucket_name", gcs_bucket,
-                "--prefix", gcs_prefix,
-            ],
-            "0. Flatten GCS directory structure"
-        )
     
     # Step 1: Split audio on silence
     run_command(
@@ -121,7 +99,7 @@ def main():
             "--csv_gs_path", args.csv_gs_path,
             "--uri_name_header", args.uri_name_header,
             "--ds_gs_prefix", args.ds_gs_prefix,
-            "--datasets_dir", args.datasets_dir,
+            "--local_datasets_dir", args.datasets_dir,
         ],
         "1. Split audio on silence"
     )
@@ -207,5 +185,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Pipeline interrupted by user")
+        sys.exit(130)
+    except Exception as e:
+        print(f"\n\n❌ Fatal error in preprocessing pipeline: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 

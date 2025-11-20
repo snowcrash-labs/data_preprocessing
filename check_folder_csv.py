@@ -36,7 +36,7 @@ csvfile_path = dataset_path / "original_gs_input.csv"
 
 # Output CSV path: {dataset_path}/deduplicated_data.csv
 output_csv_path = dataset_path / "data.csv"
-data_dir_path = dataset_path / "data"
+data_dir_path = dataset_path / "audio"
 # load CSV file
 df = pd.read_csv(csvfile_path)
 

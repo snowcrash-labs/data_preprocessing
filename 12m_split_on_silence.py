@@ -73,7 +73,7 @@ def upload_blob_from(local: Path, uri: str):
 # -----------------------------------------------------------------------------
 def process_and_upload(
     vocals_uri: str,
-    dst_dir: str,
+    ds_audio_dir: str,
     min_silence_len: int,
     silence_thresh: int,
     keep_silence: int,
@@ -82,12 +82,12 @@ def process_and_upload(
     """
     - downloads `vocals_uri` into a temp dir
     - splits on silence
-    - saves each valid segment locally to dst_dir/<stem_id>/<#####.wav>
+    - saves each valid segment locally to ds_audio_dir/<stem_id>/<#####.wav>
     - cleans up temp
     """
     track_filename = (Path(vocals_uri).name)
     track_name = os.path.splitext(str(track_filename))[0]
-    out_base = Path(dst_dir) / track_name
+    out_base = Path(ds_audio_dir) / track_name
     out_base.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
@@ -130,25 +130,16 @@ def main(
     csv_gs_path: str,
     uri_name_header: str,
     ds_gs_prefix: str,
-    workers: int,
     min_silence_len: int,
     silence_thresh: int,
     keep_silence: int,
     min_segment_len: int,
     local_datasets_dir: str,
 ):
-    # Extract CSV filename stem and create destination directory
-    csv_filename = Path(csv_gs_path).name
-    csv_stem = csv_filename.rsplit(".", 1)[0] if "." in csv_filename else csv_filename
-    
-    # Create ~/gs_imports if it doesn't exist
-    local_datasets_dir.mkdir(exist_ok=True)
-    
-    dataset_name = os.path.basename(ds_gs_prefix)
-    base_dir = local_datasets_dir / dataset_name
-    dst_dir = base_dir / "data"
-    dst_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Output directory: {dst_dir}")
+    dataset_path = os.path.join(local_datasets_dir, os.path.basename(ds_gs_prefix))
+    ds_audio_dir = os.path.join(dataset_path, "audio")
+    os.makedirs(ds_audio_dir, exist_ok=True)
+    logger.info(f"Output directory: {ds_audio_dir}")
     
     # download CSV from GCS
     with tempfile.TemporaryDirectory() as td:
@@ -176,12 +167,11 @@ def main(
                 if ds_uri:
                     uris.append(ds_uri)
 
-        try:
-            csv_copy_path = base_dir / "original_gs_input.csv"
-            shutil.copy(local_csv, csv_copy_path)
-            logger.info(f"Copied CSV to {csv_copy_path}")
-        except Exception as e:
-            logger.error(f"Failed to copy CSV to data directory: {e}")
+
+        csv_copy_path = os.path.join(dataset_path, "original_gs_input.csv")
+        shutil.copy(local_csv, csv_copy_path)
+        logger.info(f"Copied CSV to {csv_copy_path}")
+
 
     logger.info(f"{len(uris)} URIs to process")
 
@@ -189,14 +179,14 @@ def main(
     num_workers = multiprocessing.cpu_count()
     logger.info(f"Using {num_workers} parallel processes")
 
-    # process_and_upload(uris[0], str(dst_dir), min_silence_len, silence_thresh, keep_silence, min_segment_len)
+    # process_and_upload(uris[0], str(ds_audio_dir), min_silence_len, silence_thresh, keep_silence, min_segment_len)
     # process in a pool
     with ProcessPoolExecutor(max_workers=num_workers) as exe:
         futures = {
             exe.submit(
                 process_and_upload,
                 uri,
-                str(dst_dir),
+                str(ds_audio_dir),
                 min_silence_len,
                 silence_thresh,
                 keep_silence,
@@ -207,14 +197,46 @@ def main(
         for _ in tqdm(as_completed(futures), total=len(futures), desc="Overall"):
             pass
 
-    
+    # Remove empty subdirectories
+    logger.info("Checking for and removing empty subdirectories...")
+    ds_audio_path = Path(ds_audio_dir)
+    if ds_audio_path.exists():
+        # Collect all subdirectories with their depth (walking bottom-up)
+        # topdown=False gives us deepest directories first
+        all_dirs = []
+        for root, dirs, files in os.walk(ds_audio_path, topdown=False):
+            root_path = Path(root)
+            # Skip the root directory itself
+            if root_path != ds_audio_path:
+                depth = len(root_path.relative_to(ds_audio_path).parts)
+                all_dirs.append((depth, root_path))
+        
+        # Sort by depth descending (deepest first) to handle nested empty dirs
+        all_dirs.sort(key=lambda x: x[0], reverse=True)
+        
+        # Remove empty directories
+        removed_count = 0
+        for depth, dir_path in all_dirs:
+            try:
+                # Check if directory still exists and is empty
+                if dir_path.exists() and not any(dir_path.iterdir()):
+                    dir_path.rmdir()
+                    removed_count += 1
+                    logger.debug(f"Removed empty directory: {dir_path}")
+            except OSError as e:
+                logger.warning(f"Could not remove {dir_path}: {e}")
+        
+        if removed_count > 0:
+            logger.info(f"Removed {removed_count} empty subdirectories")
+        else:
+            logger.info("No empty subdirectories found")
 
     logger.info("Done.")
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(
-        description="Download CSV from GCS, download audio stems, split on silence, save segments to ~/gs_imports/{csv_stem}/data"
+        description="Download CSV from GCS, download audio stems, split on silence"
     )
     p.add_argument("--csv_gs_path", required=True, help="GCS path to CSV file, e.g. gs://my-bucket/data.csv")
     p.add_argument(
@@ -223,10 +245,7 @@ if __name__ == "__main__":
         help="Name of the CSV column containing audio URIs",
     )
     p.add_argument(
-        "--ds_gs_prefix", type=str, default="music-dataset-hooktheory-audio/roformer_voice_separated", help="Destination directory"
-    )
-    p.add_argument(
-        "--workers", type=int, default=4, help="Number of parallel processes"
+        "--ds_gs_prefix", required=True, help="GCS prefix for dataset"
     )
     p.add_argument(
         "--min_silence_len", type=int, default=2000, help="ms of silence to split on"
@@ -249,7 +268,6 @@ if __name__ == "__main__":
         csv_gs_path=args.csv_gs_path,
         uri_name_header=args.uri_name_header,
         ds_gs_prefix=args.ds_gs_prefix,
-        workers=args.workers,
         min_silence_len=args.min_silence_len,
         silence_thresh=args.silence_thresh,
         keep_silence=args.keep_silence,

@@ -8,6 +8,24 @@ Automates the complete preprocessing pipeline for voice/speaker recognition data
 - Google Cloud Storage authentication configured
 - All preprocessing scripts in the same directory
 
+## Important: GCS Flattening Step
+
+⚠️ **The `flatten_song_level_dir_datasets.py` script modifies your Google Cloud Storage bucket by moving files and deleting parent prefixes.** It should be run separately before the main preprocessing pipeline if your GCS structure needs flattening.
+
+**Run it separately:**
+```bash
+python flatten_song_level_dir_datasets.py \
+  --bucket_name "your-bucket-name" \
+  --prefix "path/to/prefix/"
+```
+
+**Warning:** This script will:
+- Copy files to flattened paths
+- **Delete the original files** from their nested locations
+- Permanently alter your GCS bucket structure
+
+Only run this if you need to flatten nested directory structures. If your files are already at the desired level, skip this step.
+
 ## Arguments
 
 - `--csv_gs_path`: GCS path to input CSV file (e.g., `gs://bucket/path/file.csv`)
@@ -16,7 +34,6 @@ Automates the complete preprocessing pipeline for voice/speaker recognition data
 - `--artist_name_header`: CSV column name containing artist names
 - `--ds_gs_prefix`: GCS prefix (default: `music-dataset-hooktheory-audio/roformer_voice_sep_custom_sample`)
 - `--datasets_dir`: Local directory for datasets (default: `~/gs_imports`)
-- `--skip_gs_flatten`: Skip GCS flattening step
 
 ## Usage
 
@@ -30,13 +47,12 @@ python preprocessing.py \
 
 ## Pipeline Steps
 
-1. **Flatten GCS** (optional): Reorganizes audio files in GCS
-2. **Split on silence**: Downloads and splits audio into segments
-3. **Deduplicate**: Matches local files with CSV, creates `deduplicated_data.csv`
-4. **Assign singer IDs**: Assigns unique IDs to artists, creates `singer_id_mapping_filtered.json`
-5. **Reorganize by singer**: Moves tracks under `{singer_id}/` directories
-6. **Hash song names**: Renames directories to MD5 hashes
-7. **Create splits**: Splits into train/val/test (80:10:10)
+1. **Split on silence**: Downloads and splits audio into segments
+2. **Deduplicate**: Matches local files with CSV, creates `deduplicated_data.csv`
+3. **Assign singer IDs**: Assigns unique IDs to artists, creates `singer_id_mapping_filtered.json`
+4. **Reorganize by singer**: Moves tracks under `{singer_id}/` directories
+5. **Hash song names**: Renames directories to MD5 hashes
+6. **Create splits**: Splits into train/val/test (80:10:10)
 
 ## Output Structure
 

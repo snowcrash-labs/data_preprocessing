@@ -34,7 +34,7 @@ args = parser.parse_args()
 # Determine file paths
 dataset_directory = Path(args.dataset_path)
 csv_path = dataset_directory / "data.csv"
-source_base = dataset_directory / "data"
+source_base = dataset_directory / "audio"
 
 # Load the dataset
 print(f"Loading dataset from {csv_path}...")
