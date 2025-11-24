@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 import json
 import os
+import sys
 from pathlib import Path
 
 # Parse command-line arguments
@@ -40,6 +41,10 @@ print(f"Loading filtered dataset from {filtered_df_path}...")
 df = pd.read_csv(filtered_df_path)
 print(f"Loaded filtered dataset with {len(df)} rows")
 
+if len(df) == 0:
+    print("Warning: Dataset is empty. Nothing to process.")
+    sys.exit(0)
+
 print(f"Artist header name: {args.artist_name_header}")
 
 def filter_and_assign_singer_ids(df):
@@ -53,7 +58,6 @@ def filter_and_assign_singer_ids(df):
         '\' \'',
         '&',
         'unknown|anonymous|unknown artist',
-        'light - quiet',
         'with', 'collection', 'collective', ','
     ]
     
@@ -66,7 +70,8 @@ def filter_and_assign_singer_ids(df):
     
     # Count NaN values
     nan_count = nan_mask.sum()
-    nan_percentage = (nan_count / len(df)) * 100
+    total_songs = len(df)
+    nan_percentage = (nan_count / total_songs * 100) if total_songs > 0 else 0.0
     
     # Combine both masks
     filter_mask = pattern_mask | nan_mask
@@ -80,9 +85,8 @@ def filter_and_assign_singer_ids(df):
     
     # Calculate percentages
     total_artists = df[args.artist_name_header].nunique()
-    total_songs = len(df)
-    artist_percentage = (filtered_artist_count / total_artists) * 100
-    song_percentage = (filtered_song_count / total_songs) * 100
+    artist_percentage = (filtered_artist_count / total_artists * 100) if total_artists > 0 else 0.0
+    song_percentage = (filtered_song_count / total_songs * 100) if total_songs > 0 else 0.0
     
     # Print results
     print(f"Total unique artist names in filtered dataset: {total_artists}")
@@ -171,13 +175,27 @@ def get_singer_id(artist_name):
 
 df['singer_id'] = df[args.artist_name_header].apply(get_singer_id)
 
-# Save the updated dataframe back to the same file
-print(f"Saving updated dataframe to {filtered_df_path}")
-df.to_csv(filtered_df_path, index=False)
+# Count rows before filtering
+rows_before = len(df)
+filtered_out_count = df['singer_id'].isna().sum()
+
+# Filter out rows that don't have a singer_id assigned (these are filtered artists)
+print(f"\nFiltering out {filtered_out_count} rows with no singer_id assigned...")
+df_filtered = df[df['singer_id'].notna()].copy()
+rows_after = len(df_filtered)
+
+print(f"Removed {rows_before - rows_after} rows ({filtered_out_count} rows)")
+kept_percentage = (rows_after / rows_before * 100) if rows_before > 0 else 0.0
+print(f"Kept {rows_after} rows ({kept_percentage:.2f}% of original dataset)")
+
+# Save the filtered dataframe back to the same file
+print(f"Saving filtered dataframe to {filtered_df_path}")
+df_filtered.to_csv(filtered_df_path, index=False)
 
 # Print some statistics
-assigned_count = df['singer_id'].notna().sum()
-print(f"\nAssigned singer IDs to {assigned_count} rows ({assigned_count/len(df)*100:.2f}% of the filtered dataset)")
+assigned_count = len(df_filtered)
+assigned_percentage = (assigned_count / rows_before * 100) if rows_before > 0 else 0.0
+print(f"\nAssigned singer IDs to {assigned_count} rows ({assigned_percentage:.2f}% of original dataset)")
 print(f"Saved reverse mapping for {len(reverse_mapping)} artist name variations")
 
 print("\nProcess completed successfully!")

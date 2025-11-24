@@ -145,7 +145,7 @@ def main():
         [
             sys.executable,
             "hash_songnames.py",
-            "--dataset_path", str(dataset_path / "desilenced_data"),
+            "--dataset_path", str(dataset_path),
             "--output_csv_path", str(output_csv_path),
         ],
         "5. Hash song names"
@@ -158,26 +158,30 @@ def main():
             "dataset_split.py",
             "--dataset_path", dataset_path_str,
             "--input_csv_name", "data.csv",
-            "--output_csv_name", "subset_split.csv",
             "--artist_name_header", args.artist_name_header,
             "--singer_id_header", "singer_id",
         ],
         "6. Dataset split (train/val/test)"
     )
     
-    # Step 7: Dataset split (custom)
-    # run_command(
-    #     [
-    #         sys.executable,
-    #         "dataset_split_custom.py",
-    #         "--dataset_path", dataset_path_str,
-    #         "--input_csv_name", "deduplicated_data.csv",
-    #         "--output_csv_name", "train_test_split_custom.csv",
-    #         "--artist_name_header", args.artist_name_header,
-    #         "--singer_id_header", "singer_id",
-    #     ],
-    #     "7. Dataset split (custom)"
-    # )
+    # Step 7: Create test pairs
+    test_dir = dataset_path / "audio" / "test"
+    output_pairs_path = dataset_path / "test_pairs.txt"
+    subset_split_csv = dataset_path / "data.csv"
+    
+    run_command(
+        [
+            sys.executable,
+            "make_test_pairs.py",
+            "--csv_path", str(subset_split_csv),
+            "--test_dir", str(test_dir),
+            "--output_path", str(output_pairs_path),
+            "--singer_id_header", "singer_id",
+            "--split_header", "split",
+            "--file_name_header", args.file_name_header,
+        ],
+        "7. Create test pairs"
+    )
     
     print(f"\n{'='*60}")
     print("🎉 All preprocessing steps completed successfully!")

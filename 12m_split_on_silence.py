@@ -114,6 +114,9 @@ def process_and_upload(
         # 3️⃣ export & upload
         for idx, seg in enumerate(valid, start=1):
             fname = f"{idx:05d}.wav"
+            # Convert to mono if stereo (ensure single channel output)
+            if seg.channels > 1:
+                seg = seg.set_channels(1)
             seg.export(str(out_base / fname), format="wav")
             # local_seg = td / fname
             # gs_target = segments_gs_prefix.rstrip("/") + f"/{track_name}/{fname}"

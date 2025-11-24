@@ -23,12 +23,7 @@ parser.add_argument(
 parser.add_argument(
     "--input_csv_name",
     required=True,
-    help="Name of the input CSV file (appended to dataset_directory)",
-)
-parser.add_argument(
-    "--output_csv_name",
-    required=True,
-    help="Name of the output CSV file (appended to dataset_directory)",
+    help="Name of the input CSV file (appended to dataset_directory). This file will be edited in place.",
 )
 parser.add_argument(
     "--artist_name_header",
@@ -45,7 +40,7 @@ args = parser.parse_args()
 # Determine file paths
 dataset_directory = Path(args.dataset_path)
 input_csv_path = dataset_directory / args.input_csv_name
-output_file = dataset_directory / args.output_csv_name
+output_file = input_csv_path  # Edit the input file in place
 
 print("Loading dataframe...")
 # load dataframe
@@ -72,6 +67,7 @@ train_singers = shuffled_singer_ids[:num_train].tolist()
 val_singers = shuffled_singer_ids[num_train:num_train + num_val].tolist()
 test_singers = shuffled_singer_ids[num_train + num_val:].tolist()
 
+print(f"\nInitial split:")
 print(f"Selected {len(train_singers)} singers for train set")
 print(f"Selected {len(val_singers)} singers for val set")
 print(f"Selected {len(test_singers)} singers for test set")
@@ -81,9 +77,52 @@ singer_split_map = {}
 for singer_id in train_singers:
     singer_split_map[singer_id] = 'train'
 for singer_id in val_singers:
-    singer_split_map[singer_id] = 'val'
-for singer_id in test_singers:
     singer_split_map[singer_id] = 'test'
+for singer_id in test_singers:
+    singer_split_map[singer_id] = 'exp'
+
+# Ensure test and exp each have at least 2 singers
+# If not, randomly move singers from train
+min_singers_per_split = 2
+
+# Check test set (val_singers)
+if len(val_singers) < min_singers_per_split:
+    needed = min_singers_per_split - len(val_singers)
+    if len(train_singers) >= needed:
+        # Randomly select singers from train to move to test
+        # Shuffle a copy to avoid modifying the original list during iteration
+        train_singers_shuffled = train_singers.copy()
+        np.random.shuffle(train_singers_shuffled)
+        singers_to_move = train_singers_shuffled[:needed]
+        for singer_id in singers_to_move:
+            train_singers.remove(singer_id)
+            val_singers.append(singer_id)
+            singer_split_map[singer_id] = 'test'
+        print(f"Moved {needed} singer(s) from train to test to ensure minimum of {min_singers_per_split}")
+    else:
+        print(f"Warning: Cannot ensure {min_singers_per_split} singers in test set. Only {len(train_singers)} available in train.")
+
+# Check exp set (test_singers)
+if len(test_singers) < min_singers_per_split:
+    needed = min_singers_per_split - len(test_singers)
+    if len(train_singers) >= needed:
+        # Randomly select singers from train to move to exp
+        # Shuffle a copy to avoid modifying the original list during iteration
+        train_singers_shuffled = train_singers.copy()
+        np.random.shuffle(train_singers_shuffled)
+        singers_to_move = train_singers_shuffled[:needed]
+        for singer_id in singers_to_move:
+            train_singers.remove(singer_id)
+            test_singers.append(singer_id)
+            singer_split_map[singer_id] = 'exp'
+        print(f"Moved {needed} singer(s) from train to exp to ensure minimum of {min_singers_per_split}")
+    else:
+        print(f"Warning: Cannot ensure {min_singers_per_split} singers in exp set. Only {len(train_singers)} available in train.")
+
+print(f"\nFinal split after adjustments:")
+print(f"Train: {len(train_singers)} singers")
+print(f"Test (val): {len(val_singers)} singers")
+print(f"Exp: {len(test_singers)} singers")
 
 # Add split column to dataframe
 def assign_split(singer_id):
@@ -92,7 +131,7 @@ def assign_split(singer_id):
 df['split'] = df[args.singer_id_header].apply(assign_split)
 
 # Convert to numeric for consistency
-df['split'] = df['split'].map({'train': 0, 'val': 1, 'test': 2})
+df['split'] = df['split'].map({'train': 0, 'test': 1, 'exp': 2})
 
 # Print statistics
 train_songs = (df['split'] == 0).sum()
@@ -105,15 +144,15 @@ print(f"Val songs: {val_songs} ({val_songs/len(df)*100:.1f}%)")
 print(f"Test songs: {test_songs} ({test_songs/len(df)*100:.1f}%)")
 print(f"Total songs: {len(df)}")
 
-# save the dataframe to a new csv file
+# save the dataframe back to the input csv file (overwrites in place)
 df.to_csv(output_file, index=False)
-print(f"Saved dataframe with split info to: {output_file}")
+print(f"Updated input CSV file with split info: {output_file}")
 
 # now inside the data folder, move each folder to the train, val, or test folder
 sad_id_path = dataset_directory / "audio"
 train_path = sad_id_path / 'train'
-val_path = sad_id_path / 'val'
-test_path = sad_id_path / 'test'
+val_path = sad_id_path / 'test'
+test_path = sad_id_path / 'exp'
 
 # Create directories if they don't exist
 train_path.mkdir(parents=True, exist_ok=True)
@@ -124,11 +163,11 @@ print(f"\nMoving folders from {sad_id_path}...")
 
 # Get all folders in data directory (these should be singer_ids)
 if sad_id_path.exists():
-    folders = [f for f in sad_id_path.iterdir() if f.is_dir() and f.name not in ['train', 'val', 'test']]
+    folders = [f for f in sad_id_path.iterdir() if f.is_dir() and f.name not in ['train', 'test', 'exp']]
     total_folders = len(folders)
     print(f"Found {total_folders} folders to move")
     
-    moved_counts = {'train': 0, 'val': 0, 'test': 0}
+    moved_counts = {'train': 0, 'test': 0, 'exp': 0}
     progress_count = 0
     
     for i, folder in enumerate(folders, 1):
@@ -141,12 +180,12 @@ if sad_id_path.exists():
         if split_name == 'train':
             destination = train_path / singer_id
             moved_counts['train'] += 1
-        elif split_name == 'val':
-            destination = val_path / singer_id
-            moved_counts['val'] += 1
         elif split_name == 'test':
-            destination = test_path / singer_id
+            destination = val_path / singer_id
             moved_counts['test'] += 1
+        elif split_name == 'exp':
+            destination = test_path / singer_id
+            moved_counts['exp'] += 1
         
         # Move the folder
         try:
@@ -160,12 +199,12 @@ if sad_id_path.exists():
         if progress_count % 1000 == 0:
             print(f"Progress: {progress_count}/{total_folders} folders moved "
                   f"({progress_count/total_folders*100:.1f}%) | "
-                  f"Train: {moved_counts['train']}, Val: {moved_counts['val']}, Test: {moved_counts['test']}")
+                  f"Train: {moved_counts['train']}, Val: {moved_counts['test']}, Test: {moved_counts['exp']}")
     
     print(f"\nFolder movement completed:")
     print(f"Train folders: {moved_counts['train']}")
-    print(f"Val folders: {moved_counts['val']}")
-    print(f"Test folders: {moved_counts['test']}")
+    print(f"Val folders: {moved_counts['test']}")
+    print(f"Test folders: {moved_counts['exp']}")
     print(f"Total moved: {sum(moved_counts.values())}")
     
 else:

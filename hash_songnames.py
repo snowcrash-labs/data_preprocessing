@@ -73,10 +73,11 @@ def main():
     )
     args = parser.parse_args()
 
-    base_dir = os.path.abspath(args.dataset_path) + "/data"
+    base_dir = os.path.abspath(args.dataset_path) + "/audio"
     if not os.path.isdir(base_dir):
-        print(f"Error: {base_dir} is not a valid directory.")
-        return
+        raise FileNotFoundError(f"Error: {base_dir} is not a valid directory.")
+    else:
+        print(f"Successfully found {base_dir}")
 
     process_second_level_folders(base_dir, args.output_csv_path)
     print(f"Renaming complete. Mapping written to {args.output_csv_path}.")
