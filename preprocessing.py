@@ -71,7 +71,7 @@ def main():
     )
     parser.add_argument(
         "--file_name_header",
-        default="track_file_name",
+        default="local_file_name",
         help="Name of CSV column header containing track/folder names",
     )
     parser.add_argument(
@@ -82,7 +82,8 @@ def main():
 
     parser.add_argument(
         "--datasets_dir",
-        default="~/gs_imports",
+        required=True,
+        # default="/home/brendanoconnor/gs_imports",
         help="Directory to store datasets)",
     )
     parser.add_argument(

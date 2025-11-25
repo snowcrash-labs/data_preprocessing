@@ -112,11 +112,15 @@ def process_and_upload(
         logger.info(f"[{track_name}] found {len(valid)} ≥{min_segment_len} ms segments")
 
         # 3️⃣ export & upload
+        target_sample_rate = 16000  # 16kHz
         for idx, seg in enumerate(valid, start=1):
             fname = f"{idx:05d}.wav"
             # Convert to mono if stereo (ensure single channel output)
             if seg.channels > 1:
                 seg = seg.set_channels(1)
+            # Resample to 16kHz if needed
+            if seg.frame_rate != target_sample_rate:
+                seg = seg.set_frame_rate(target_sample_rate)
             seg.export(str(out_base / fname), format="wav")
             # local_seg = td / fname
             # gs_target = segments_gs_prefix.rstrip("/") + f"/{track_name}/{fname}"
