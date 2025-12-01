@@ -49,7 +49,16 @@ parser.add_argument(
     default="local_file_name",
     help="Name of CSV column containing file/song names (default: local_file_name)"
 )
+parser.add_argument(
+    "--seed",
+    type=int,
+    default=42,
+    help="Random seed for reproducibility (default: 42)",
+)
 args = parser.parse_args()
+
+# Set random seed for reproducibility
+random.seed(args.seed)
 
 # Load CSV file
 print(f"Loading CSV from {args.csv_path}")

@@ -35,6 +35,18 @@ parser.add_argument(
     required=True,
     help="Name of the CSV column header containing singer IDs",
 )
+parser.add_argument(
+    "--seed",
+    type=int,
+    default=42,
+    help="Random seed for reproducibility (default: 42)",
+)
+parser.add_argument(
+    "--reference_dataset_path",
+    type=str,
+    default=None,
+    help="Optional path to reference dataset to mimic split structure. If provided, singer IDs will be assigned to the same splits as in the reference dataset.",
+)
 args = parser.parse_args()
 
 # Determine file paths
@@ -51,35 +63,116 @@ unique_singer_ids = df[args.singer_id_header].unique()
 total_singers = len(unique_singer_ids)
 print(f"Total unique singer IDs: {total_singers}")
 
-# Calculate split sizes (80:10:10)
-num_train = int(total_singers * 0.8)
-num_val = int(total_singers * 0.1)
-num_test = total_singers - num_train - num_val  # Remaining goes to test
-
-print(f"Split sizes: Train={num_train}, Val={num_val}, Test={num_test}")
-
-# Randomly shuffle singer IDs
-np.random.seed(42)
-shuffled_singer_ids = np.random.permutation(unique_singer_ids)
-
-# Split into train, val, test
-train_singers = shuffled_singer_ids[:num_train].tolist()
-val_singers = shuffled_singer_ids[num_train:num_train + num_val].tolist()
-test_singers = shuffled_singer_ids[num_train + num_val:].tolist()
-
-print(f"\nInitial split:")
-print(f"Selected {len(train_singers)} singers for train set")
-print(f"Selected {len(val_singers)} singers for val set")
-print(f"Selected {len(test_singers)} singers for test set")
-
-# Create a mapping from singer_id to split for quick lookup
+# Initialize singer_split_map
 singer_split_map = {}
-for singer_id in train_singers:
-    singer_split_map[singer_id] = 'train'
-for singer_id in val_singers:
-    singer_split_map[singer_id] = 'test'
-for singer_id in test_singers:
-    singer_split_map[singer_id] = 'exp'
+
+# Check if reference dataset is provided
+if args.reference_dataset_path:
+    print(f"\nUsing reference dataset: {args.reference_dataset_path}")
+    reference_path = Path(args.reference_dataset_path)
+    reference_audio_path = reference_path / "audio"
+    
+    if not reference_audio_path.exists():
+        print(f"Warning: Reference dataset audio directory not found at {reference_audio_path}")
+        print("Falling back to random split.")
+        args.reference_dataset_path = None
+    else:
+        # Read singer IDs from reference dataset splits
+        ref_train_path = reference_audio_path / 'train'
+        ref_test_path = reference_audio_path / 'test'
+        ref_exp_path = reference_audio_path / 'exp'
+        
+        ref_train_singers = set()
+        ref_test_singers = set()
+        ref_exp_singers = set()
+        
+        if ref_train_path.exists():
+            ref_train_singers = {f.name for f in ref_train_path.iterdir() if f.is_dir()}
+        if ref_test_path.exists():
+            ref_test_singers = {f.name for f in ref_test_path.iterdir() if f.is_dir()}
+        if ref_exp_path.exists():
+            ref_exp_singers = {f.name for f in ref_exp_path.iterdir() if f.is_dir()}
+        
+        print(f"Reference dataset splits:")
+        print(f"  Train: {len(ref_train_singers)} singers")
+        print(f"  Test: {len(ref_test_singers)} singers")
+        print(f"  Exp: {len(ref_exp_singers)} singers")
+        
+        # Map current dataset singer IDs to reference splits
+        matched_count = 0
+        unmatched_singers = []
+        
+        for singer_id in unique_singer_ids:
+            if singer_id in ref_train_singers:
+                singer_split_map[singer_id] = 'train'
+                matched_count += 1
+            elif singer_id in ref_test_singers:
+                singer_split_map[singer_id] = 'test'
+                matched_count += 1
+            elif singer_id in ref_exp_singers:
+                singer_split_map[singer_id] = 'exp'
+                matched_count += 1
+            else:
+                unmatched_singers.append(singer_id)
+        
+        print(f"\nMatched {matched_count} singer IDs from reference dataset")
+        print(f"Unmatched {len(unmatched_singers)} singer IDs (will be assigned randomly)")
+        
+        # For unmatched singers, assign randomly using the same 80:10:10 split
+        if unmatched_singers:
+            np.random.seed(args.seed)
+            shuffled_unmatched = np.random.permutation(unmatched_singers)
+            num_unmatched = len(unmatched_singers)
+            num_train_unmatched = int(num_unmatched * 0.8)
+            num_val_unmatched = int(num_unmatched * 0.1)
+            
+            for singer_id in shuffled_unmatched[:num_train_unmatched]:
+                singer_split_map[singer_id] = 'train'
+            for singer_id in shuffled_unmatched[num_train_unmatched:num_train_unmatched + num_val_unmatched]:
+                singer_split_map[singer_id] = 'test'
+            for singer_id in shuffled_unmatched[num_train_unmatched + num_val_unmatched:]:
+                singer_split_map[singer_id] = 'exp'
+        
+        # Create lists for compatibility with rest of code
+        train_singers = [sid for sid, split in singer_split_map.items() if split == 'train']
+        val_singers = [sid for sid, split in singer_split_map.items() if split == 'test']
+        test_singers = [sid for sid, split in singer_split_map.items() if split == 'exp']
+        
+        print(f"\nFinal split (matching reference + random for unmatched):")
+        print(f"Train: {len(train_singers)} singers")
+        print(f"Test (val): {len(val_singers)} singers")
+        print(f"Exp: {len(test_singers)} singers")
+
+# If no reference dataset, use random split (original behavior)
+if not args.reference_dataset_path:
+    # Calculate split sizes (80:10:10)
+    num_train = int(total_singers * 0.8)
+    num_val = int(total_singers * 0.1)
+    num_test = total_singers - num_train - num_val  # Remaining goes to test
+
+    print(f"Split sizes: Train={num_train}, Val={num_val}, Test={num_test}")
+
+    # Randomly shuffle singer IDs
+    np.random.seed(args.seed)
+    shuffled_singer_ids = np.random.permutation(unique_singer_ids)
+
+    # Split into train, val, test
+    train_singers = shuffled_singer_ids[:num_train].tolist()
+    val_singers = shuffled_singer_ids[num_train:num_train + num_val].tolist()
+    test_singers = shuffled_singer_ids[num_train + num_val:].tolist()
+
+    print(f"\nInitial split:")
+    print(f"Selected {len(train_singers)} singers for train set")
+    print(f"Selected {len(val_singers)} singers for val set")
+    print(f"Selected {len(test_singers)} singers for test set")
+
+    # Create a mapping from singer_id to split for quick lookup
+    for singer_id in train_singers:
+        singer_split_map[singer_id] = 'train'
+    for singer_id in val_singers:
+        singer_split_map[singer_id] = 'test'
+    for singer_id in test_singers:
+        singer_split_map[singer_id] = 'exp'
 
 # Ensure test and exp each have at least 2 singers
 # If not, randomly move singers from train

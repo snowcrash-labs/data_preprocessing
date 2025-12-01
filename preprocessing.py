@@ -8,6 +8,8 @@ import argparse
 import subprocess
 import sys
 import os
+import random
+import numpy as np
 from pathlib import Path
 
 # Get the directory where this script is located
@@ -98,7 +100,30 @@ def main():
         default=7,
         help="Stopping step number (1-7). Steps after this will be skipped. Default: 7",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducibility (default: 42)",
+    )
+    parser.add_argument(
+        "--reference_dataset_path",
+        type=str,
+        default=None,
+        help="Optional path to reference dataset to mimic split structure. If provided, singer IDs will be assigned to the same splits as in the reference dataset.",
+    )
+    parser.add_argument(
+        "--singer_id_mapping_json",
+        type=str,
+        default=None,
+        help="Optional path to JSON file with pre-existing singer ID mappings. JSON should have singer_id keys with 'lowercase' and 'variations' nested dicts. If provided, uses this mapping instead of generating new IDs.",
+    )
     args = parser.parse_args()
+    
+    # Set random seeds for reproducibility
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    print(f"Random seed set to {args.seed} for reproducibility")
     
     # Validate step arguments
     if args.step < 1 or args.step > 7:
@@ -121,15 +146,16 @@ def main():
     
     # Step 1: Split audio on silence
     if args.step <= 1 <= args.stop_step:
+        cmd = [
+            sys.executable,
+            "12m_split_on_silence.py",
+            "--csv_gs_path", args.csv_gs_path,
+            "--uri_name_header", args.uri_name_header,
+            "--ds_gs_prefix", args.ds_gs_prefix,
+            "--local_datasets_dir", args.datasets_dir,
+        ]
         run_command(
-            [
-                sys.executable,
-                "12m_split_on_silence.py",
-                "--csv_gs_path", args.csv_gs_path,
-                "--uri_name_header", args.uri_name_header,
-                "--ds_gs_prefix", args.ds_gs_prefix,
-                "--local_datasets_dir", args.datasets_dir,
-            ],
+            cmd,
             "1. Split audio on silence"
         )
     
@@ -141,19 +167,25 @@ def main():
                 "check_folder_csv.py",
                 "--dataset_path", dataset_path_str,
                 "--uri_name_header", args.uri_name_header,
+                "--seed", str(args.seed),
             ],
             "2. Check folder CSV and deduplicate"
         )
     
     # Step 3: Assign singer IDs
     if args.step <= 3 <= args.stop_step:
+        cmd = [
+            sys.executable,
+            "assign_singer_id.py",
+            "--dataset_path", dataset_path_str,
+            "--artist_name_header", args.artist_name_header,
+        ]
+        # Add singer ID mapping JSON if provided
+        if args.singer_id_mapping_json:
+            cmd.extend(["--singer_id_mapping_json", args.singer_id_mapping_json])
+        
         run_command(
-            [
-                sys.executable,
-                "assign_singer_id.py",
-                "--dataset_path", dataset_path_str,
-                "--artist_name_header", args.artist_name_header,
-            ],
+            cmd,
             "3. Assign singer IDs"
         )
     
@@ -184,17 +216,23 @@ def main():
             "5. Hash song names"
         )
     
-    # Step 6: Dataset split (standard 80:10:10)
+    # Step 6: Dataset split (standard 80:10:10 or matching reference dataset)
     if args.step <= 6 <= args.stop_step:
+        cmd = [
+            sys.executable,
+            "dataset_split.py",
+            "--dataset_path", dataset_path_str,
+            "--input_csv_name", "data.csv",
+            "--artist_name_header", args.artist_name_header,
+            "--singer_id_header", "singer_id",
+            "--seed", str(args.seed),
+        ]
+        # Add reference dataset path if provided
+        if args.reference_dataset_path:
+            cmd.extend(["--reference_dataset_path", args.reference_dataset_path])
+        
         run_command(
-            [
-                sys.executable,
-                "dataset_split.py",
-                "--dataset_path", dataset_path_str,
-                "--input_csv_name", "data.csv",
-                "--artist_name_header", args.artist_name_header,
-                "--singer_id_header", "singer_id",
-            ],
+            cmd,
             "6. Dataset split (train/val/test)"
         )
     
@@ -214,6 +252,7 @@ def main():
                 "--singer_id_header", "singer_id",
                 "--split_header", "split",
                 "--file_name_header", args.file_name_header,
+                "--seed", str(args.seed),
             ],
             "7. Create test pairs"
         )

@@ -58,7 +58,7 @@ def copy_blob_to_flattened(blob_info: tuple) -> tuple:
         
         # Construct new name in flattened prefix
         if original_blob_name.startswith(original_prefix):
-            relative_path = original_blob_name[len(original_prefix):]
+            relative_path = original_blob_name[len(original_prefix):].lstrip("/")
             new_blob_name = flattened_prefix + relative_path
         else:
             return (original_blob_name, None, "error")
@@ -90,12 +90,12 @@ def process_blob(blob_info: tuple) -> tuple:
         
         # Remove prefix to get relative path
         if blob_name.startswith(prefix):
-            relative_path = blob_name[len(prefix):]
+            relative_path = blob_name[len(prefix):].lstrip("/")
         else:
             return (blob_name, None, "error")
         
-        # Split into parts after prefix
-        parts = relative_path.rstrip("/").split("/")
+        # Split into parts after prefix and filter out empty strings
+        parts = [p for p in relative_path.rstrip("/").split("/") if p]
         
         # If file is already directly after prefix (only filename, no subdirectory), skip it
         if len(parts) == 1:

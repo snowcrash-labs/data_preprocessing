@@ -28,7 +28,16 @@ parser.add_argument(
     required=True,
     help="Name of the CSV column header containing track names/URIs",
 )
+parser.add_argument(
+    "--seed",
+    type=int,
+    default=42,
+    help="Random seed for reproducibility (default: 42)",
+)
 args = parser.parse_args()
+
+# Set random seed for reproducibility
+random.seed(args.seed)
 
 # Determine CSV file path: {dataset_path}/original_gs_input.csv
 dataset_path = Path(args.dataset_path)
