@@ -1,0 +1,8 @@
+*.log
+*.txt
+*.csv
+*.json
+*.yaml
+*.yml
+*.jsonl
+*.jsonl*
