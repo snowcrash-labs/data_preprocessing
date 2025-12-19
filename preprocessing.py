@@ -118,6 +118,24 @@ def main():
         default=None,
         help="Optional path to JSON file with pre-existing singer ID mappings. JSON should have singer_id keys with 'lowercase' and 'variations' nested dicts. If provided, uses this mapping instead of generating new IDs.",
     )
+    parser.add_argument(
+        "--siqi_split",
+        action="store_true",
+        help="Use Siqi's train/test split method (90:10) instead of standard dataset_split.py (80:10:10). "
+             "Prioritizes singers with 2-4 songs for the test set.",
+    )
+    parser.add_argument(
+        "--siqi_test_ratio",
+        type=float,
+        default=0.1,
+        help="Test set ratio when using --siqi_split (default: 0.1 = 10%%)",
+    )
+    parser.add_argument(
+        "--siqi_singer_data_json",
+        type=str,
+        default=None,
+        help="Optional path to singer_data_complete.json for Siqi split. Adds extra metadata to output.",
+    )
     args = parser.parse_args()
     
     # Set random seeds for reproducibility
@@ -216,25 +234,47 @@ def main():
             "5. Hash song names"
         )
     
-    # Step 6: Dataset split (standard 80:10:10 or matching reference dataset)
+    # Step 6: Dataset split (standard 80:10:10, Siqi's 90:10, or matching reference dataset)
     if args.step <= 6 <= args.stop_step:
-        cmd = [
-            sys.executable,
-            "dataset_split.py",
-            "--dataset_path", dataset_path_str,
-            "--input_csv_name", "data.csv",
-            "--artist_name_header", args.artist_name_header,
-            "--singer_id_header", "singer_id",
-            "--seed", str(args.seed),
-        ]
-        # Add reference dataset path if provided
-        if args.reference_dataset_path:
-            cmd.extend(["--reference_dataset_path", args.reference_dataset_path])
-        
-        run_command(
-            cmd,
-            "6. Dataset split (train/val/test)"
-        )
+        if args.siqi_split:
+            # Use Siqi's train/test split (90:10, prioritizes singers with 2-4 songs)
+            cmd = [
+                sys.executable,
+                "siqis_train_test_split_singer.py",
+                "--dataset_path", dataset_path_str,
+                "--input_csv_name", "data.csv",
+                "--artist_name_header", args.artist_name_header,
+                "--singer_id_header", "singer_id",
+                "--seed", str(args.seed),
+                "--test_ratio", str(args.siqi_test_ratio),
+            ]
+            # Add singer data JSON if provided
+            if args.siqi_singer_data_json:
+                cmd.extend(["--singer_data_json", args.siqi_singer_data_json])
+            
+            run_command(
+                cmd,
+                "6. Dataset split - Siqi method (train/test 90:10)"
+            )
+        else:
+            # Use standard dataset_split.py (80:10:10)
+            cmd = [
+                sys.executable,
+                "dataset_split.py",
+                "--dataset_path", dataset_path_str,
+                "--input_csv_name", "data.csv",
+                "--artist_name_header", args.artist_name_header,
+                "--singer_id_header", "singer_id",
+                "--seed", str(args.seed),
+            ]
+            # Add reference dataset path if provided
+            if args.reference_dataset_path:
+                cmd.extend(["--reference_dataset_path", args.reference_dataset_path])
+            
+            run_command(
+                cmd,
+                "6. Dataset split (train/val/test 80:10:10)"
+            )
     
     # Step 7: Create test pairs
     if args.step <= 7 <= args.stop_step:
