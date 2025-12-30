@@ -119,16 +119,22 @@ def main():
         help="Optional path to JSON file with pre-existing singer ID mappings. JSON should have singer_id keys with 'lowercase' and 'variations' nested dicts. If provided, uses this mapping instead of generating new IDs.",
     )
     parser.add_argument(
-        "--siqi_split",
+        "--siqi_exp_split",
         action="store_true",
-        help="Use Siqi's train/test split method (90:10) instead of standard dataset_split.py (80:10:10). "
-             "Prioritizes singers with 2-4 songs for the test set.",
+        help="Use Siqi's train/test/exp split method instead of standard dataset_split.py. "
+             "Test set from singers with 2-5 songs, exp set sampled from various song count ranges.",
     )
     parser.add_argument(
         "--siqi_test_ratio",
         type=float,
         default=0.1,
-        help="Test set ratio when using --siqi_split (default: 0.1 = 10%%)",
+        help="Test set ratio when using --siqi_split or --siqi_exp_split (default: 0.1 = 10%%)",
+    )
+    parser.add_argument(
+        "--siqi_exp_samples_per_range",
+        type=int,
+        default=10,
+        help="Number of singers to sample per song count range for exp set when using --siqi_exp_split (default: 10)",
     )
     parser.add_argument(
         "--siqi_singer_data_json",
@@ -234,19 +240,20 @@ def main():
             "5. Hash song names"
         )
     
-    # Step 6: Dataset split (standard 80:10:10, Siqi's 90:10, or matching reference dataset)
+    # Step 6: Dataset split (standard 80:10:10, Siqi's 90:10, Siqi's exp split, or matching reference dataset)
     if args.step <= 6 <= args.stop_step:
-        if args.siqi_split:
-            # Use Siqi's train/test split (90:10, prioritizes singers with 2-4 songs)
+        if args.siqi_exp_split:
+            # Use Siqi's train/test/exp split (test from 2-5 songs, exp sampled from ranges)
             cmd = [
                 sys.executable,
-                "siqis_train_test_split_singer.py",
+                "siqi_train_test_exp_split_singer.py",
                 "--dataset_path", dataset_path_str,
                 "--input_csv_name", "data.csv",
                 "--artist_name_header", args.artist_name_header,
                 "--singer_id_header", "singer_id",
                 "--seed", str(args.seed),
                 "--test_ratio", str(args.siqi_test_ratio),
+                "--exp_samples_per_range", str(args.siqi_exp_samples_per_range),
             ]
             # Add singer data JSON if provided
             if args.siqi_singer_data_json:
@@ -254,7 +261,7 @@ def main():
             
             run_command(
                 cmd,
-                "6. Dataset split - Siqi method (train/test 90:10)"
+                "6. Dataset split - Siqi exp method (train/test/exp)"
             )
         else:
             # Use standard dataset_split.py (80:10:10)
