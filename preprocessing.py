@@ -188,7 +188,7 @@ def main():
         run_command(
             [
                 sys.executable,
-                "analyse_split_audio.py",
+                "desilence_split.py",
                 "--dataset_path", dataset_path_str,
             ],
             "2. Split audio on silence"
@@ -252,7 +252,7 @@ def main():
         )
     
     # Step 6: Dataset split (standard 80:10:10, Siqi's 90:10, Siqi's exp split, or matching reference dataset)
-    if args.step <= 6 <= args.stop_step:
+    if args.step <= 7 <= args.stop_step:
         if args.siqi_exp_split:
             # Use Siqi's train/test/exp split (test from 2-5 songs, exp sampled from ranges)
             cmd = [
@@ -272,7 +272,7 @@ def main():
             
             run_command(
                 cmd,
-                "6. Dataset split - Siqi exp method (train/test/exp)"
+                "7. Dataset split - Siqi exp method (train/test/exp)"
             )
         else:
             # Use standard dataset_split.py (80:10:10)
