@@ -92,13 +92,13 @@ def main():
         "--step",
         type=int,
         default=1,
-        help="Starting step number (1-7). Steps before this will be skipped. Default: 1",
+        help="Starting step number (1-8). Steps before this will be skipped. Default: 1",
     )
     parser.add_argument(
         "--stop_step",
         type=int,
-        default=7,
-        help="Stopping step number (1-7). Steps after this will be skipped. Default: 7",
+        default=8,
+        help="Stopping step number (1-8). Steps after this will be skipped. Default: 8",
     )
     parser.add_argument(
         "--seed",
@@ -150,11 +150,11 @@ def main():
     print(f"Random seed set to {args.seed} for reproducibility")
     
     # Validate step arguments
-    if args.step < 1 or args.step > 7:
-        print(f"❌ Error: --step must be between 1 and 7, got {args.step}")
+    if args.step < 1 or args.step > 8:
+        print(f"❌ Error: --step must be between 1 and 8, got {args.step}")
         sys.exit(1)
-    if args.stop_step < 1 or args.stop_step > 7:
-        print(f"❌ Error: --stop_step must be between 1 and 7, got {args.stop_step}")
+    if args.stop_step < 1 or args.stop_step > 8:
+        print(f"❌ Error: --stop_step must be between 1 and 8, got {args.stop_step}")
         sys.exit(1)
     if args.step > args.stop_step:
         print(f"❌ Error: --step ({args.step}) cannot be greater than --stop_step ({args.stop_step})")
@@ -168,11 +168,11 @@ def main():
     dataset_path = Path(args.datasets_dir) / os.path.basename(args.ds_gs_prefix)
     dataset_path_str = str(dataset_path)
     
-    # Step 1: Split audio on silence
+    # Step 1: Download and resample from GCS
     if args.step <= 1 <= args.stop_step:
         cmd = [
             sys.executable,
-            "12m_split_on_silence.py",
+            "gs_download_resample.py",
             "--csv_gs_path", args.csv_gs_path,
             "--uri_name_header", args.uri_name_header,
             "--ds_gs_prefix", args.ds_gs_prefix,
@@ -180,11 +180,22 @@ def main():
         ]
         run_command(
             cmd,
-            "1. Split audio on silence"
+            "1. Download and resample from GCS"
         )
     
-    # Step 2: Check folder CSV and create deduplicated_data.csv
+    # Step 2: Split audio on silence
     if args.step <= 2 <= args.stop_step:
+        run_command(
+            [
+                sys.executable,
+                "analyse_split_audio.py",
+                "--dataset_path", dataset_path_str,
+            ],
+            "2. Split audio on silence"
+        )
+    
+    # Step 3: Check folder CSV and create deduplicated_data.csv
+    if args.step <= 3 <= args.stop_step:
         run_command(
             [
                 sys.executable,
@@ -193,11 +204,11 @@ def main():
                 "--uri_name_header", args.uri_name_header,
                 "--seed", str(args.seed),
             ],
-            "2. Check folder CSV and deduplicate"
+            "3. Check folder CSV and deduplicate"
         )
     
-    # Step 3: Assign singer IDs
-    if args.step <= 3 <= args.stop_step:
+    # Step 4: Assign singer IDs
+    if args.step <= 4 <= args.stop_step:
         cmd = [
             sys.executable,
             "assign_singer_id.py",
@@ -210,12 +221,12 @@ def main():
         
         run_command(
             cmd,
-            "3. Assign singer IDs"
+            "4. Assign singer IDs"
         )
     
-    # Step 4: Reorganize to singer_id directories
+    # Step 5: Reorganize to singer_id directories
     # Assuming file_name_header is same as file_name_header, and singer_id_header is "singer_id"
-    if args.step <= 4 <= args.stop_step:
+    if args.step <= 5 <= args.stop_step:
         run_command(
             [
                 sys.executable,
@@ -224,11 +235,11 @@ def main():
                 "--file_name_header", args.file_name_header,
                 "--singer_id_header", "singer_id",
             ],
-            "4. Reorganize to singer_id directories"
+            "5. Reorganize to singer_id directories"
         )
     
-    # Step 5: Hash song names
-    if args.step <= 5 <= args.stop_step:
+    # Step 6: Hash song names
+    if args.step <= 6 <= args.stop_step:
         output_csv_path = dataset_path / "trackname_to_md5name_mapping.csv"
         run_command(
             [
@@ -237,7 +248,7 @@ def main():
                 "--dataset_path", str(dataset_path),
                 "--output_csv_path", str(output_csv_path),
             ],
-            "5. Hash song names"
+            "6. Hash song names"
         )
     
     # Step 6: Dataset split (standard 80:10:10, Siqi's 90:10, Siqi's exp split, or matching reference dataset)
@@ -280,11 +291,11 @@ def main():
             
             run_command(
                 cmd,
-                "6. Dataset split (train/val/test 80:10:10)"
+                "7. Dataset split (train/val/test 80:10:10)"
             )
     
-    # Step 7: Create test pairs
-    if args.step <= 7 <= args.stop_step:
+    # Step 8: Create test pairs
+    if args.step <= 8 <= args.stop_step:
         test_dir = dataset_path / "audio" / "test"
         output_pairs_path = dataset_path / "test_pairs.txt"
         subset_split_csv = dataset_path / "data.csv"
@@ -301,7 +312,7 @@ def main():
                 "--file_name_header", args.file_name_header,
                 "--seed", str(args.seed),
             ],
-            "7. Create test pairs"
+            "8. Create test pairs"
         )
     
     print(f"\n{'='*60}")
