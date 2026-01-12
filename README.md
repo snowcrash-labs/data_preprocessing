@@ -2,6 +2,8 @@
 
 Automates the complete preprocessing pipeline for voice/speaker recognition datasets, from downloading audio files from Google Cloud Storage to creating train/validation/test splits.
 
+In addition to this, the file `split_gs_dataset_into_chunks.py` can take a GS dataset and split it into chunks for easier processing if necessary.
+
 ## Prerequisites
 
 - Python 3.x with `google-cloud-storage`, `pydub`, `pandas`, `tqdm`
