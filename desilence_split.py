@@ -46,6 +46,12 @@ def split_audio_file(
     audio_path = Path(audio_path)
     track_name = audio_path.stem
     out_base = Path(output_base_dir) / track_name
+    
+    # Skip if directory already exists (already processed)
+    if out_base.exists() and out_base.is_dir():
+        logger.info(f"[{track_name}] already processed, skipping")
+        return
+    
     out_base.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -83,7 +89,7 @@ def main(
     min_segment_len: int,
 ):
     dataset_path = Path(dataset_path)
-    resampled_audio_dir = dataset_path / "resampled_audio"
+    resampled_audio_dir = dataset_path / "audio"
     output_audio_dir = dataset_path / "audio"
     
     if not resampled_audio_dir.exists():

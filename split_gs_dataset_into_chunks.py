@@ -221,6 +221,14 @@ def main() -> int:
             if args.resume and dst_name in done:
                 continue
 
+            # Skip if destination already exists in GCS
+            dst_blob = bucket.blob(dst_name)
+            if dst_blob.exists():
+                print(f"Skipping {dst_name} - already exists in GCS", file=sys.stderr)
+                append_done(done_path, dst_name)  # Record so --resume knows about it
+                pbar.update(1)
+                continue
+
             copy_blob_with_retries(bucket, o.name, dst_name)
             append_done(done_path, dst_name)
             pbar.update(1)
