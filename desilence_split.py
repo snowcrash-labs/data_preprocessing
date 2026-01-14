@@ -161,6 +161,23 @@ def main(
         else:
             logger.info("No empty subdirectories found")
 
+    # Remove original wav files from the directory (but not subdirectories or their contents)
+    logger.info("Removing original wav files from audio directory...")
+    original_wavs = list(output_audio_dir.glob("*.wav"))
+    removed_wav_count = 0
+    for wav_file in original_wavs:
+        try:
+            wav_file.unlink()
+            removed_wav_count += 1
+            logger.debug(f"Removed original wav: {wav_file.name}")
+        except OSError as e:
+            logger.warning(f"Could not remove {wav_file}: {e}")
+    
+    if removed_wav_count > 0:
+        logger.info(f"Removed {removed_wav_count} original wav files")
+    else:
+        logger.info("No original wav files to remove")
+
     logger.info("Done splitting audio.")
 
 
