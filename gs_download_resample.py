@@ -60,14 +60,19 @@ def download_and_resample(
     vocals_uri: str,
     output_dir: str,
     target_sample_rate: int = 16000,
+    gs_file_uri_in_csv: bool = False,
 ) -> None:
     """
     - Downloads `vocals_uri` into a temp dir
     - Resamples to target sample rate and converts to mono
     - Saves to output_dir/<track_name>.wav
     """
-    track_filename = Path(vocals_uri).name
-    track_name = os.path.splitext(str(track_filename))[0]
+    
+    if gs_file_uri_in_csv:
+        track_name = os.path.basename(os.path.dirname(vocals_uri))
+    else:
+        track_filename = Path(vocals_uri).name
+        track_name = os.path.splitext(str(track_filename))[0]
     out_path = Path(output_dir) / f"{track_name}.wav"
     
     # Skip if already processed
@@ -100,8 +105,8 @@ def download_and_resample(
             
             # 3️⃣ export
             audio.export(str(out_path), format="wav")
-            logger.info(f"[{track_name}] downloaded and resampled to {target_sample_rate}Hz mono")
-            
+            logger.info(f"[{track_name}] downloaded resampled to {target_sample_rate}Hz mono, and saved to {out_path}")
+
         except Exception as e:
             logger.error(f"[{track_name}] processing failed: {e}")
             return
@@ -116,7 +121,11 @@ def main(
     ds_gs_prefix: str,
     local_datasets_dir: str,
     target_sample_rate: int = 16000,
+    gs_file_uri_in_csv: bool = False,
+    parallel: bool = True,
 ):
+    # Expand ~ to home directory
+    local_datasets_dir = os.path.expanduser(local_datasets_dir)
     dataset_path = os.path.join(local_datasets_dir, os.path.basename(ds_gs_prefix))
     audio_dir = os.path.join(dataset_path, "audio")
     os.makedirs(audio_dir, exist_ok=True)
@@ -142,8 +151,11 @@ def main(
                 logger.error(f"CSV missing '{uri_name_header}' column")
                 return
             for row in rdr:
-                track_name = os.path.basename(row[uri_name_header].strip())
-                ds_uri = "gs://" + os.path.join(ds_gs_prefix, track_name)
+                if gs_file_uri_in_csv:
+                    ds_uri = row[uri_name_header].strip()
+                else:
+                    track_name = os.path.basename(row[uri_name_header].strip())
+                    ds_uri = "gs://" + os.path.join(ds_gs_prefix, track_name)
                 if ds_uri:
                     uris.append(ds_uri)
 
@@ -153,23 +165,30 @@ def main(
 
     logger.info(f"{len(uris)} URIs to process")
 
-    # use all CPU cores
-    num_workers = multiprocessing.cpu_count()
-    logger.info(f"Using {num_workers} parallel processes")
+    if parallel:
+        # use all CPU cores
+        num_workers = multiprocessing.cpu_count()
+        logger.info(f"Using {num_workers} parallel processes")
 
-    # process in a pool
-    with ProcessPoolExecutor(max_workers=num_workers) as exe:
-        futures = {
-            exe.submit(
-                download_and_resample,
-                uri,
-                str(audio_dir),
-                target_sample_rate,
-            ): uri
-            for uri in uris
-        }
-        for _ in tqdm(as_completed(futures), total=len(futures), desc="Downloading"):
-            pass
+        # process in a pool
+        with ProcessPoolExecutor(max_workers=num_workers) as exe:
+            futures = {
+                exe.submit(
+                    download_and_resample,
+                    uri,
+                    str(audio_dir),
+                    target_sample_rate,
+                    gs_file_uri_in_csv,
+                ): uri
+                for uri in uris
+            }
+            for _ in tqdm(as_completed(futures), total=len(futures), desc="Downloading"):
+                pass
+    else:
+        # sequential processing
+        logger.info("Using sequential processing (parallel disabled)")
+        for uri in tqdm(uris, desc="Downloading"):
+            download_and_resample(uri, str(audio_dir), target_sample_rate, gs_file_uri_in_csv)
 
     logger.info("Done downloading and resampling.")
 
@@ -193,6 +212,16 @@ if __name__ == "__main__":
     p.add_argument(
         "--target_sample_rate", type=int, default=16000, help="Target sample rate in Hz (default: 16000)"
     )
+    p.add_argument(
+        "--gs_file_uri_in_csv", action="store_true",
+        default=False,
+        help="Whether the CSV contains the GCS file URI (or otherwise, the relevant folder to the file)"
+    )
+    p.add_argument(
+        "--no-parallel", action="store_true",
+        default=False,
+        help="Disable parallel processing (process files sequentially)"
+    )
     args = p.parse_args()
 
     main(
@@ -201,5 +230,7 @@ if __name__ == "__main__":
         ds_gs_prefix=args.ds_gs_prefix,
         local_datasets_dir=args.local_datasets_dir,
         target_sample_rate=args.target_sample_rate,
+        gs_file_uri_in_csv=args.gs_file_uri_in_csv,
+        parallel=not args.no_parallel,
     )
 

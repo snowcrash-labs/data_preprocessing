@@ -142,6 +142,18 @@ def main():
         default=None,
         help="Optional path to singer_data_complete.json for Siqi split. Adds extra metadata to output.",
     )
+    parser.add_argument(
+        "--gs_file_uri_in_csv",
+        action="store_true",
+        default=False,
+        help="Whether the CSV contains the GCS file URI (or otherwise, the relevant folder to the file)",
+    )
+    parser.add_argument(
+        "--target_sample_rate",
+        type=int,
+        required=True,
+        help="Target sample rate in Hz",
+    )
     args = parser.parse_args()
     
     # Set random seeds for reproducibility
@@ -177,6 +189,9 @@ def main():
             "--uri_name_header", args.uri_name_header,
             "--ds_gs_prefix", args.ds_gs_prefix,
             "--local_datasets_dir", args.datasets_dir,
+            "--target_sample_rate", str(args.target_sample_rate),
+            # Only add the flag if args.gs_file_uri_in_csv is True
+            *(['--gs_file_uri_in_csv'] if args.gs_file_uri_in_csv else []),
         ]
         run_command(
             cmd,
