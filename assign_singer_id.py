@@ -12,7 +12,10 @@ import json
 import os
 import sys
 import shutil
+import multiprocessing
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from tqdm import tqdm
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(
@@ -33,6 +36,12 @@ parser.add_argument(
     type=str,
     default=None,
     help="Optional path to JSON file with pre-existing singer ID mappings. JSON should have singer_id keys with 'lowercase' and 'variations' nested dicts. If provided, uses this mapping instead of generating new IDs.",
+)
+parser.add_argument(
+    "--no-parallel",
+    action="store_true",
+    default=False,
+    help="Disable parallel processing (process files sequentially)",
 )
 args = parser.parse_args()
 
@@ -235,41 +244,79 @@ print(f"Kept {rows_after} rows ({kept_percentage:.2f}% of original dataset)")
 # Remove corresponding audio files/directories from the filesystem
 # Check if 'local_file_name' column exists (from previous preprocessing step)
 audio_dir = dataset_path / "audio"
+
+def find_and_remove_dir(args_tuple: tuple) -> tuple:
+    """Find and remove a directory. Returns (success, error_msg)."""
+    local_file_name, audio_dir_str = args_tuple
+    audio_dir_path = Path(audio_dir_str)
+    
+    if pd.isna(local_file_name) or not local_file_name:
+        return (False, None)
+    
+    dir_to_remove = None
+    
+    # Check if it's directly under audio/
+    direct_path = audio_dir_path / str(local_file_name)
+    if direct_path.exists() and direct_path.is_dir():
+        dir_to_remove = direct_path
+    else:
+        # Check if it's nested under a singer_id directory
+        for singer_dir in audio_dir_path.iterdir():
+            if singer_dir.is_dir():
+                nested_path = singer_dir / str(local_file_name)
+                if nested_path.exists() and nested_path.is_dir():
+                    dir_to_remove = nested_path
+                    break
+    
+    if dir_to_remove and dir_to_remove.exists():
+        try:
+            shutil.rmtree(dir_to_remove)
+            return (True, None)
+        except Exception as e:
+            return (False, f"Could not remove {dir_to_remove}: {e}")
+    
+    return (False, None)
+
 if 'local_file_name' in df.columns and audio_dir.exists():
     rows_to_remove = df[df['singer_id'].isna()]
-    removed_dirs = 0
-    failed_removals = 0
     
     if len(rows_to_remove) > 0:
         print(f"\nRemoving {len(rows_to_remove)} audio directories from filesystem...")
-        for idx, row in rows_to_remove.iterrows():
-            local_file_name = row.get('local_file_name')
-            if pd.notna(local_file_name) and local_file_name:
-                # Try to find the directory - could be at root or nested under singer_id
-                dir_to_remove = None
+        
+        # Prepare work items
+        work_items = [
+            (row.get('local_file_name'), str(audio_dir))
+            for _, row in rows_to_remove.iterrows()
+        ]
+        
+        removed_dirs = 0
+        failed_removals = 0
+        
+        if getattr(args, 'no_parallel', False):
+            # Sequential processing
+            print("Processing sequentially...")
+            for item in tqdm(work_items, desc="Removing directories"):
+                success, error_msg = find_and_remove_dir(item)
+                if success:
+                    removed_dirs += 1
+                elif error_msg:
+                    failed_removals += 1
+                    print(f"  ⚠️  Warning: {error_msg}")
+        else:
+            # Parallel processing
+            num_workers = min(32, multiprocessing.cpu_count() * 2)
+            print(f"Processing with {num_workers} parallel workers...")
+            
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = {executor.submit(find_and_remove_dir, item): item for item in work_items}
                 
-                # Check if it's directly under audio/
-                direct_path = audio_dir / str(local_file_name)
-                if direct_path.exists() and direct_path.is_dir():
-                    dir_to_remove = direct_path
-                else:
-                    # Check if it's nested under a singer_id directory
-                    for singer_dir in audio_dir.iterdir():
-                        if singer_dir.is_dir():
-                            nested_path = singer_dir / str(local_file_name)
-                            if nested_path.exists() and nested_path.is_dir():
-                                dir_to_remove = nested_path
-                                break
-                
-                if dir_to_remove and dir_to_remove.exists():
-                    try:
-                        shutil.rmtree(dir_to_remove)
+                for future in tqdm(as_completed(futures), total=len(futures), desc="Removing directories"):
+                    success, error_msg = future.result()
+                    if success:
                         removed_dirs += 1
-                        if removed_dirs % 100 == 0:
-                            print(f"  Progress: {removed_dirs}/{len(rows_to_remove)} directories removed...")
-                    except Exception as e:
-                        print(f"  ⚠️  Warning: Could not remove {dir_to_remove}: {e}")
+                    elif error_msg:
                         failed_removals += 1
+                        print(f"  ⚠️  Warning: {error_msg}")
         
         print(f"\nFilesystem cleanup complete:")
         print(f"  ✅ Successfully removed: {removed_dirs} directories")

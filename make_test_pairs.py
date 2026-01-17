@@ -14,6 +14,7 @@ import pandas as pd
 import argparse
 from pathlib import Path
 import glob
+from tqdm import tqdm
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(
@@ -102,7 +103,7 @@ if not test_wav_dir.exists():
 # Build mapping from (singer_id, song_name) to CSV row for reference
 # The song_name in directory might match local_file_name or be derived from it
 csv_singer_song_map = {}
-for _, row in test_df.iterrows():
+for _, row in tqdm(test_df.iterrows(), total=len(test_df), desc="Building singer-song mapping"):
     singer_id = str(row[args.singer_id_header])
     file_name = str(row[args.file_name_header])
     # Store mapping - we'll use this to match directory structure
@@ -116,10 +117,8 @@ all_wav_files = []
 test_singers = {}  # Dictionary to store test singers and their files
 
 # Expected structure: test_dir/{singer_id}/{song_name}/{audio_chunks.wav}
-for singer_dir in test_wav_dir.iterdir():
-    if not singer_dir.is_dir():
-        continue
-    
+singer_dirs = [d for d in test_wav_dir.iterdir() if d.is_dir()]
+for singer_dir in tqdm(singer_dirs, desc="Scanning singer directories"):
     singer_id = singer_dir.name
     
     # Only process singers that are in the test CSV
@@ -155,12 +154,9 @@ all_pairs = []
 used_pairs = set()  # Track all pairs to ensure no duplicates
 
 # For each singer in the test set
-for singer_id, singer_files in test_singers.items():
-    print(f"Processing test singer {singer_id} with {len(singer_files)} files")
-    
+for singer_id, singer_files in tqdm(test_singers.items(), desc="Creating pairs for singers"):
     # Make all combinations of 2 files from this singer
     same_singer_pairs = list(itertools.combinations(singer_files, 2))
-    print(f"  Created {len(same_singer_pairs)} positive pairs")
     
     # Get files not from this singer - do this once per singer
     # Extract singer_id from path (first part of the path)

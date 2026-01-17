@@ -9,7 +9,10 @@ import pandas as pd
 import numpy as np
 import os
 import shutil
+import multiprocessing
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from tqdm import tqdm
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(
@@ -46,6 +49,12 @@ parser.add_argument(
     type=str,
     default=None,
     help="Optional path to reference dataset to mimic split structure. If provided, singer IDs will be assigned to the same splits as in the reference dataset.",
+)
+parser.add_argument(
+    "--no-parallel",
+    action="store_true",
+    default=False,
+    help="Disable parallel processing (process files sequentially)",
 )
 args = parser.parse_args()
 
@@ -254,51 +263,76 @@ test_path.mkdir(parents=True, exist_ok=True)
 
 print(f"\nMoving folders from {sad_id_path}...")
 
+def move_singer_folder(args_tuple: tuple) -> tuple:
+    """Move a singer folder to its split directory. Returns (split_name, success, error_msg)."""
+    folder_path, singer_id, split_name, train_p, val_p, test_p = args_tuple
+    
+    if split_name == 'train':
+        destination = Path(train_p) / singer_id
+    elif split_name == 'test':
+        destination = Path(val_p) / singer_id
+    elif split_name == 'exp':
+        destination = Path(test_p) / singer_id
+    else:
+        destination = Path(train_p) / singer_id
+    
+    try:
+        shutil.move(str(folder_path), str(destination))
+        return (split_name, True, None)
+    except Exception as e:
+        return (split_name, False, f"Error moving {singer_id}: {e}")
+
 # Get all folders in data directory (these should be singer_ids)
 if sad_id_path.exists():
     folders = [f for f in sad_id_path.iterdir() if f.is_dir() and f.name not in ['train', 'test', 'exp']]
     total_folders = len(folders)
     print(f"Found {total_folders} folders to move")
     
-    moved_counts = {'train': 0, 'test': 0, 'exp': 0}
-    progress_count = 0
+    # Prepare work items
+    work_items = []
+    for folder in folders:
+        singer_id = folder.name
+        split_name = singer_split_map.get(singer_id, 'train')
+        work_items.append((folder, singer_id, split_name, str(train_path), str(val_path), str(test_path)))
     
-    for i, folder in enumerate(folders, 1):
-        singer_id = folder.name  # folder name should be the singer_id (e.g., id09707)
+    moved_counts = {'train': 0, 'test': 0, 'exp': 0}
+    errors = 0
+    
+    if getattr(args, 'no_parallel', False):
+        # Sequential processing
+        print("Processing sequentially...")
+        for item in tqdm(work_items, desc="Moving folders"):
+            split_name, success, error_msg = move_singer_folder(item)
+            if success:
+                moved_counts[split_name] += 1
+            else:
+                errors += 1
+                if error_msg:
+                    print(error_msg)
+    else:
+        # Parallel processing
+        num_workers = min(32, multiprocessing.cpu_count() * 2)
+        print(f"Processing with {num_workers} parallel workers...")
         
-        # Look up split for this singer_id
-        split_name = singer_split_map.get(singer_id, 'train')  # default to train
-        
-        # Determine destination
-        if split_name == 'train':
-            destination = train_path / singer_id
-            moved_counts['train'] += 1
-        elif split_name == 'test':
-            destination = val_path / singer_id
-            moved_counts['test'] += 1
-        elif split_name == 'exp':
-            destination = test_path / singer_id
-            moved_counts['exp'] += 1
-        
-        # Move the folder
-        try:
-            shutil.move(str(folder), str(destination))
-            progress_count += 1
-        except Exception as e:
-            print(f"Error moving {singer_id}: {e}")
-            continue
-        
-        # Print progress every 1000 folders
-        if progress_count % 1000 == 0:
-            print(f"Progress: {progress_count}/{total_folders} folders moved "
-                  f"({progress_count/total_folders*100:.1f}%) | "
-                  f"Train: {moved_counts['train']}, Val: {moved_counts['test']}, Test: {moved_counts['exp']}")
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = {executor.submit(move_singer_folder, item): item for item in work_items}
+            
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Moving folders"):
+                split_name, success, error_msg = future.result()
+                if success:
+                    moved_counts[split_name] += 1
+                else:
+                    errors += 1
+                    if error_msg:
+                        print(error_msg)
     
     print(f"\nFolder movement completed:")
     print(f"Train folders: {moved_counts['train']}")
     print(f"Val folders: {moved_counts['test']}")
     print(f"Test folders: {moved_counts['exp']}")
     print(f"Total moved: {sum(moved_counts.values())}")
+    if errors > 0:
+        print(f"Errors: {errors}")
     
 else:
     print(f"Error: data directory not found at {sad_id_path}")

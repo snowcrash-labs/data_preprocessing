@@ -154,6 +154,12 @@ def main():
         required=True,
         help="Target sample rate in Hz",
     )
+    parser.add_argument(
+        "--no-parallel",
+        action="store_true",
+        default=False,
+        help="Disable parallel processing in all steps (process files sequentially)",
+    )
     args = parser.parse_args()
     
     # Set random seeds for reproducibility
@@ -180,6 +186,9 @@ def main():
     dataset_path = Path(args.datasets_dir) / os.path.basename(args.ds_gs_prefix)
     dataset_path_str = str(dataset_path)
     
+    # Helper to add --no-parallel flag if set
+    no_parallel_flag = ['--no-parallel'] if getattr(args, 'no_parallel', False) else []
+    
     # Step 1: Download and resample from GCS
     if args.step <= 1 <= args.stop_step:
         cmd = [
@@ -190,8 +199,8 @@ def main():
             "--ds_gs_prefix", args.ds_gs_prefix,
             "--local_datasets_dir", args.datasets_dir,
             "--target_sample_rate", str(args.target_sample_rate),
-            # Only add the flag if args.gs_file_uri_in_csv is True
             *(['--gs_file_uri_in_csv'] if args.gs_file_uri_in_csv else []),
+            *no_parallel_flag,
         ]
         run_command(
             cmd,
@@ -211,14 +220,16 @@ def main():
     
     # Step 3: Check folder CSV and create deduplicated_data.csv
     if args.step <= 3 <= args.stop_step:
+        cmd = [
+            sys.executable,
+            "check_folder_csv.py",
+            "--dataset_path", dataset_path_str,
+            "--uri_name_header", args.uri_name_header,
+            "--seed", str(args.seed),
+            *(['--gs_file_uri_in_csv'] if args.gs_file_uri_in_csv else []),
+        ]
         run_command(
-            [
-                sys.executable,
-                "check_folder_csv.py",
-                "--dataset_path", dataset_path_str,
-                "--uri_name_header", args.uri_name_header,
-                "--seed", str(args.seed),
-            ],
+            cmd,
             "3. Check folder CSV and deduplicate"
         )
     
@@ -229,6 +240,7 @@ def main():
             "assign_singer_id.py",
             "--dataset_path", dataset_path_str,
             "--artist_name_header", args.artist_name_header,
+            *no_parallel_flag,
         ]
         # Add singer ID mapping JSON if provided
         if args.singer_id_mapping_json:
@@ -249,6 +261,7 @@ def main():
                 "--dataset_path", dataset_path_str,
                 "--file_name_header", args.file_name_header,
                 "--singer_id_header", "singer_id",
+                *no_parallel_flag,
             ],
             "5. Reorganize to singer_id directories"
         )
@@ -262,11 +275,12 @@ def main():
                 "hash_songnames.py",
                 "--dataset_path", str(dataset_path),
                 "--output_csv_path", str(output_csv_path),
+                *no_parallel_flag,
             ],
             "6. Hash song names"
         )
     
-    # Step 6: Dataset split (standard 80:10:10, Siqi's 90:10, Siqi's exp split, or matching reference dataset)
+    # Step 7: Dataset split (standard 80:10:10, Siqi's 90:10, Siqi's exp split, or matching reference dataset)
     if args.step <= 7 <= args.stop_step:
         if args.siqi_exp_split:
             # Use Siqi's train/test/exp split (test from 2-5 songs, exp sampled from ranges)
@@ -280,6 +294,7 @@ def main():
                 "--seed", str(args.seed),
                 "--test_ratio", str(args.siqi_test_ratio),
                 "--exp_samples_per_range", str(args.siqi_exp_samples_per_range),
+                *no_parallel_flag,
             ]
             # Add singer data JSON if provided
             if args.siqi_singer_data_json:
@@ -299,6 +314,7 @@ def main():
                 "--artist_name_header", args.artist_name_header,
                 "--singer_id_header", "singer_id",
                 "--seed", str(args.seed),
+                *no_parallel_flag,
             ]
             # Add reference dataset path if provided
             if args.reference_dataset_path:
