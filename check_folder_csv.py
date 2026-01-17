@@ -1,9 +1,7 @@
 """
 Match local audio files with CSV entries and create deduplicated dataset.
 
-Reads CSV from {dataset_path}/original_gs_input.csv, matches entries with local files
-in {dataset_path}/desilenced_data/, and creates deduplicated_data.csv with only
-matched entries and local_file_name column.
+Purpose: Creates a clean CSV that only references audio data you actually have locally, dropping any entries where the download/processing failed.
 """
 import argparse
 import numpy as np
@@ -12,6 +10,7 @@ import os
 import re
 import random
 from pathlib import Path
+from tqdm import tqdm
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(
@@ -34,6 +33,13 @@ parser.add_argument(
     default=42,
     help="Random seed for reproducibility (default: 42)",
 )
+parser.add_argument(
+    "--gs_file_uri_in_csv",
+    action="store_true",
+    default=False,
+    help="If set, the CSV contains full GCS file URIs (extract track name from parent directory). "
+         "Otherwise, extract track name from the filename itself.",
+)
 args = parser.parse_args()
 
 # Set random seed for reproducibility
@@ -47,7 +53,13 @@ csvfile_path = dataset_path / "original_gs_input.csv"
 output_csv_path = dataset_path / "data.csv"
 data_dir_path = dataset_path / "audio"
 # load CSV file
-df = pd.read_csv(csvfile_path)
+# Note: Some URIs contain commas, so we read line-by-line to avoid parsing issues
+print(f"Loading CSV file from {csvfile_path}...")
+with open(csvfile_path, 'r', encoding='utf-8') as f:
+    lines = [line.strip() for line in f if line.strip()]
+header = lines[0]
+data = lines[1:]
+df = pd.DataFrame({header: data})
 
 # print headers of each column
 print(df.columns.tolist())
@@ -58,12 +70,20 @@ print("Extracting song names from CSV...")
 csv_names_no_wav = {}  # Set 1: Basenames with .wav removed -> original gcs_link
 
 # Track the index of each filename to map back to the dataframe
-for index, row in df.iterrows():
+for index, row in tqdm(df.iterrows(), total=len(df), desc="Extracting song names"):
     try:
         link = row[args.uri_name_header]
-        songname = os.path.splitext(os.path.basename(link))[0]
         
-        # Set 1: Remove .wav extension
+        # Extract track name based on URI structure
+        if args.gs_file_uri_in_csv:
+            # URI contains full file path like gs://bucket/path/track_name/vocals.wav
+            # Extract track name from parent directory
+            songname = os.path.basename(os.path.dirname(link))
+        else:
+            # URI contains the track name as the filename
+            songname = os.path.splitext(os.path.basename(link))[0]
+        
+        # Set 1: Remove .wav extension if still present
         if not songname.endswith('.wav'):
             csv_names_no_wav[songname] = index
     except:
@@ -96,7 +116,7 @@ def handle_duplicate(index, existing_name, new_name):
 files_in_csv = []
 potentially_not_found = []
 
-for item in sad_items:
+for item in tqdm(sad_items, desc="Matching local files to CSV"):
 
     found = False
     
@@ -142,7 +162,7 @@ print("Adding local_file_name column to dataframe...")
 df['local_file_name'] = None
 
 # Populate the local_file_name column using the mapping
-for index, folder_name in local_file_mapping.items():
+for index, folder_name in tqdm(local_file_mapping.items(), desc="Populating local_file_name"):
     df.at[index, 'local_file_name'] = folder_name
 
 # Filter the dataframe to only include rows with local_file_name
