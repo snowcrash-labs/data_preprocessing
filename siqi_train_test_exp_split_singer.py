@@ -15,9 +15,11 @@ import argparse
 import json
 import random
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import time
 import pandas as pd
+from tqdm import tqdm
 
 
 def parse_args():
@@ -74,6 +76,11 @@ def parse_args():
         "--copy_files",
         action="store_true",
         help="Copy files instead of moving them (default: move files)",
+    )
+    parser.add_argument(
+        "--no-parallel",
+        action="store_true",
+        help="Disable parallel processing (run sequentially)",
     )
     return parser.parse_args()
 
@@ -225,14 +232,16 @@ def main():
     train_files_moved = 0
     test_files_moved = 0
     exp_files_moved = 0
+    skipped = 0
     errors = 0
     
     # Move/copy files to their respective directories
     operation_name = "Copying" if args.copy_files else "Moving"
     print(f"\n{operation_name} files to train/test/exp directories...")
     
-    processed = 0
-    for singer_id in unique_singer_ids:
+    # Helper function to process a single singer
+    def process_singer(singer_id):
+        """Process a single singer directory. Returns (split_type, wav_count, status)."""
         src_singer_dir = audio_dir / singer_id
         
         # Determine destination
@@ -244,44 +253,105 @@ def main():
         else:  # exp
             dest_singer_dir = exp_dir / singer_id
         
-        # Check if source directory exists and isn't already in train/test/exp
+        # Check if source directory exists
         if not src_singer_dir.exists():
-            continue
+            return (split_type, 0, 'no_source')
+        
+        # Check if destination already exists (skip if so)
+        if dest_singer_dir.exists():
+            # Count existing files for stats
+            wav_count = len(list(dest_singer_dir.rglob("*.wav")))
+            return (split_type, wav_count, 'skipped')
         
         try:
             if args.copy_files:
                 # Copy entire directory tree
-                if dest_singer_dir.exists():
-                    shutil.rmtree(dest_singer_dir)
                 shutil.copytree(src_singer_dir, dest_singer_dir)
-                
-                # Count files copied
-                wav_count = len(list(dest_singer_dir.rglob("*.wav")))
             else:
                 # Move entire directory
                 shutil.move(str(src_singer_dir), str(dest_singer_dir))
-                
-                # Count files moved
-                wav_count = len(list(dest_singer_dir.rglob("*.wav")))
             
-            if split_type == 'train':
-                train_files_moved += wav_count
-            elif split_type == 'test':
-                test_files_moved += wav_count
-            else:  # exp
-                exp_files_moved += wav_count
+            # Count files moved/copied
+            wav_count = len(list(dest_singer_dir.rglob("*.wav")))
+            return (split_type, wav_count, 'success')
             
-            processed += 1
-            # Print progress every 100 singers
-            if processed % 100 == 0:
-                elapsed = time.time() - start_time
-                print(f"Progress: {processed}/{len(unique_singer_ids)} singers processed "
-                      f"({processed/len(unique_singer_ids)*100:.1f}%) | "
-                      f"Train: {train_files_moved}, Test: {test_files_moved}, Exp: {exp_files_moved}")
-                
         except Exception as e:
-            print(f"Error processing {singer_id}: {str(e)}")
-            errors += 1
+            return (split_type, 0, f'error: {str(e)}')
+    
+    # Filter to only singers that need processing
+    singers_to_process = list(unique_singer_ids)
+    
+    if getattr(args, 'no_parallel', False):
+        # Sequential processing
+        print("Running in sequential mode...")
+        for singer_id in tqdm(singers_to_process, desc="Processing singers"):
+            split_type, wav_count, status = process_singer(singer_id)
+            
+            if status == 'success':
+                if split_type == 'train':
+                    train_files_moved += wav_count
+                elif split_type == 'test':
+                    test_files_moved += wav_count
+                else:
+                    exp_files_moved += wav_count
+            elif status == 'skipped':
+                skipped += 1
+                # Still count the files for statistics
+                if split_type == 'train':
+                    train_files_moved += wav_count
+                elif split_type == 'test':
+                    test_files_moved += wav_count
+                else:
+                    exp_files_moved += wav_count
+            elif status.startswith('error'):
+                print(f"Error processing {singer_id}: {status}")
+                errors += 1
+    else:
+        # Parallel processing
+        print("Running in parallel mode...")
+        max_workers = min(32, len(singers_to_process))
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_singer = {
+                executor.submit(process_singer, singer_id): singer_id
+                for singer_id in singers_to_process
+            }
+            
+            # Process results with progress bar
+            with tqdm(total=len(singers_to_process), desc="Processing singers") as pbar:
+                for future in as_completed(future_to_singer):
+                    singer_id = future_to_singer[future]
+                    try:
+                        split_type, wav_count, status = future.result()
+                        
+                        if status == 'success':
+                            if split_type == 'train':
+                                train_files_moved += wav_count
+                            elif split_type == 'test':
+                                test_files_moved += wav_count
+                            else:
+                                exp_files_moved += wav_count
+                        elif status == 'skipped':
+                            skipped += 1
+                            # Still count the files for statistics
+                            if split_type == 'train':
+                                train_files_moved += wav_count
+                            elif split_type == 'test':
+                                test_files_moved += wav_count
+                            else:
+                                exp_files_moved += wav_count
+                        elif status.startswith('error'):
+                            tqdm.write(f"Error processing {singer_id}: {status}")
+                            errors += 1
+                    except Exception as e:
+                        tqdm.write(f"Exception processing {singer_id}: {str(e)}")
+                        errors += 1
+                    
+                    pbar.update(1)
+    
+    if skipped > 0:
+        print(f"Skipped {skipped} singers (destination already exists)")
     
     # Update CSV with split information
     print("\nUpdating CSV with split information...")
