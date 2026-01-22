@@ -4,6 +4,7 @@ Match local audio files with CSV entries and create deduplicated dataset.
 Purpose: Creates a clean CSV that only references audio data you actually have locally, dropping any entries where the download/processing failed.
 """
 import argparse
+import csv
 import numpy as np
 import pandas as pd
 import os
@@ -53,16 +54,55 @@ csvfile_path = dataset_path / "original_gs_input.csv"
 output_csv_path = dataset_path / "data.csv"
 data_dir_path = dataset_path / "audio"
 # load CSV file
-# Note: Some URIs contain commas, so we read line-by-line to avoid parsing issues
+# Note: The CSV uses proper quoting for fields containing commas, so we use csv.reader
 print(f"Loading CSV file from {csvfile_path}...")
+
+rows = []
+skipped_lines = 0
 with open(csvfile_path, 'r', encoding='utf-8') as f:
-    lines = [line.strip() for line in f if line.strip()]
-header = lines[0]
-data = lines[1:]
-df = pd.DataFrame({header: data})
+    reader = csv.reader(f)
+    header = next(reader)  # Read header row
+    print(f"CSV headers: {header}")
+    
+    for row_num, row in enumerate(reader, start=2):  # start=2 because row 1 is header
+        # Handle rows with expected number of columns
+        if len(row) == 5:
+            rows.append({
+                'index': row[0],
+                'title': row[1],
+                'artist_name': row[2],
+                'youtube_link': row[3],
+                'gcs_link': row[4]
+            })
+        elif len(row) > 5:
+            # More columns than expected - likely unquoted commas in a field
+            # Try to reconstruct: gcs_link is last (starts with gs://), youtube_link is second-to-last
+            gcs_link = row[-1]
+            youtube_link = row[-2]
+            # index is first, title is second, artist_name is everything in between
+            index_val = row[0]
+            title = row[1]
+            artist_name = ','.join(row[2:-2])  # Join middle parts back together
+            rows.append({
+                'index': index_val,
+                'title': title,
+                'artist_name': artist_name,
+                'youtube_link': youtube_link,
+                'gcs_link': gcs_link
+            })
+        else:
+            # Too few columns - skip
+            skipped_lines += 1
+            if skipped_lines <= 5:
+                print(f"Warning: Row {row_num} has {len(row)} columns (expected 5): {str(row)[:100]}...")
+
+if skipped_lines > 5:
+    print(f"Warning: {skipped_lines} total rows could not be parsed")
+
+df = pd.DataFrame(rows)
 
 # print headers of each column
-print(df.columns.tolist())
+print(f"Loaded {len(df)} rows with columns: {df.columns.tolist()}")
 
 
 print("Extracting song names from CSV...")
@@ -87,6 +127,7 @@ for index, row in tqdm(df.iterrows(), total=len(df), desc="Extracting song names
         if not songname.endswith('.wav'):
             csv_names_no_wav[songname] = index
     except:
+        print(f"Error extracting song name from {row}")
         continue
 
 # Get all items in data_dir_path directory (only depth 1, no subdirectories)
@@ -117,9 +158,8 @@ files_in_csv = []
 potentially_not_found = []
 
 for item in tqdm(sad_items, desc="Matching local files to CSV"):
-
     found = False
-    
+
     # Check Set 1 (no_wav)
     if item in csv_names_no_wav:
         files_in_csv.append(item)
