@@ -6,3 +6,5 @@
 *.yml
 *.jsonl
 *.jsonl*
+between_datasets_voiceid_mapping/
+**/between_datasets_voiceid_mapping/
