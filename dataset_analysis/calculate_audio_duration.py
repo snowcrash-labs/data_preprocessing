@@ -133,7 +133,7 @@ def main():
         description='Calculate combined duration of all audio files in a directory'
     )
     parser.add_argument(
-        'directory',
+        '--directory', '-d',
         type=str,
         help='Directory to search for audio files'
     )
