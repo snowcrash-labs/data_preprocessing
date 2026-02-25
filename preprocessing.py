@@ -55,18 +55,6 @@ def main():
         description="Run complete preprocessing pipeline for voice dataset"
     )
     parser.add_argument(
-        "--csv_gs_path",
-        required=True,
-        # default="gs://music-dataset-hooktheory-audio/roformer_voice_sep_custom_sample/roformer_voice_sep_custom_sample.csv",
-        help="GCS path to CSV file (e.g. gs://bucket/path/file.csv)",
-    )
-    parser.add_argument(
-        "--ds_gs_prefix",
-        required=True,
-        # default="music-dataset-hooktheory-audio/roformer_voice_sep_custom_sample",
-        help="GCS prefix for dataset",
-    )
-    parser.add_argument(
         "--uri_name_header",
         default="GCloud Url",
         help="Name of CSV column header containing audio URIs",
@@ -81,12 +69,17 @@ def main():
         default="Artist",
         help="Name of CSV column header containing artist names",
     )
-
     parser.add_argument(
-        "--datasets_dir",
+        "--dataset_dir",
         required=True,
         # default="/home/brendanoconnor/gs_imports",
         help="Directory to store datasets)",
+    )
+    parser.add_argument(
+        "--wav_depth",
+        type=int,
+        default=1,
+        help="Depth of the wav directory. Default is 1: audio/*.wav -> audio/<track_name>/chunks. 2: dataset/audio/<voice_id>/<song_id>.wav -> dataset/audio/<voice_id>/<song_id>/chunks.",
     )
     parser.add_argument(
         "--step",
@@ -183,40 +176,43 @@ def main():
     print(f"{'='*60}\n")
     
     # Derive dataset_path from csv_gs_path
-    dataset_path = Path(args.datasets_dir) / os.path.basename(args.ds_gs_prefix)
+    dataset_path = Path(args.dataset_dir)
     dataset_path_str = str(dataset_path)
     
     # Helper to add --no-parallel flag if set
     no_parallel_flag = ['--no-parallel'] if getattr(args, 'no_parallel', False) else []
     
-    # Step 1: Download and resample from GCS
+    # Step 1: Resample audio in place (GCS data assumed already downloaded at dataset_path)
     if args.step <= 1 <= args.stop_step:
         cmd = [
             sys.executable,
-            "gs_download_resample.py",
-            "--csv_gs_path", args.csv_gs_path,
-            "--uri_name_header", args.uri_name_header,
-            "--ds_gs_prefix", args.ds_gs_prefix,
-            "--local_datasets_dir", args.datasets_dir,
+            "resample_data.py",
+            "--audio_dir", dataset_path_str,
             "--target_sample_rate", str(args.target_sample_rate),
-            *(['--gs_file_uri_in_csv'] if args.gs_file_uri_in_csv else []),
-            *no_parallel_flag,
+            *(["--num_workers", "1"] if getattr(args, "no_parallel", False) else []),
         ]
         run_command(
             cmd,
-            "1. Download and resample from GCS"
+            "1. Resample audio (in place)",
         )
     
     # Step 2: Split audio on silence
     if args.step <= 2 <= args.stop_step:
+        cmd = [
+            sys.executable,
+            "desilence_split.py",
+            "--dataset_path", dataset_path_str,
+        ]
+        if args.wav_depth == 2:
+            cmd.extend(["--wav_depth", "2"])
+        else:
+            cmd.extend(["--wav_depth", "1"])
         run_command(
-            [
-                sys.executable,
-                "desilence_split.py",
-                "--dataset_path", dataset_path_str,
-            ],
+            cmd,
             "2. Split audio on silence"
         )
+
+
     
     # Step 3: Check folder CSV and create deduplicated_data.csv
     if args.step <= 3 <= args.stop_step:
