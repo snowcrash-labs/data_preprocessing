@@ -186,7 +186,7 @@ def main():
     if args.step <= 1 <= args.stop_step:
         cmd = [
             sys.executable,
-            "resample_data.py",
+            "reformat_data.py",
             "--audio_dir", dataset_path_str,
             "--target_sample_rate", str(args.target_sample_rate),
             *(["--num_workers", "1"] if getattr(args, "no_parallel", False) else []),

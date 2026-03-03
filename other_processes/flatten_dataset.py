@@ -10,10 +10,6 @@ import sys
 from pathlib import Path
 
 
-def is_integer_dir(name: str) -> bool:
-    """Return True if name is a non-empty string of digits."""
-    return name.isdigit()
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -50,11 +46,6 @@ def main() -> None:
         if not subdir.is_dir():
             if args.verbose:
                 print(f"Skip (not dir): {subdir.name}")
-            skipped += 1
-            continue
-        if not is_integer_dir(subdir.name):
-            if args.verbose:
-                print(f"Skip (non-integer dir): {subdir.name}")
             skipped += 1
             continue
 
