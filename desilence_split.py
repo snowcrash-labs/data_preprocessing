@@ -2,12 +2,8 @@
 """
 Split audio files on silence and save segments.
 
-Depth 1 (--wav_depth): Reads .wav files directly under {dataset_path}/audio/,
-splits each on silence, saves segments to {dataset_path}/audio/<track_name>/<#####.wav>.
-
-Depth 2 (--wav_depth): Reads {dataset_path}/audio/<voice_id>/<song_id>.wav for each
-voice_id subdir. Splits each file and saves to {dataset_path}/audio/<voice_id>/<song_id>/<#####.wav>.
-Result: dataset/audio/voice_id/track_id/chunks.
+Assumes depth 1: reads .wav files directly under {dataset_path}/audio/, splits each on
+silence, and saves segments to {dataset_path}/audio/<track_name>/<#####.wav>.
 """
 import argparse
 import logging
@@ -91,33 +87,26 @@ def main(
     silence_thresh: int,
     keep_silence: int,
     min_segment_len: int,
-    wav_depth: int,
+    includes_audio_subdirs: bool,
 ):
     dataset_path = Path(dataset_path)
-    dataset_audio_dir = dataset_path / "audio"
+    if includes_audio_subdirs:
+        dataset_audio_dir = dataset_path / "audio"
+    else:
+        dataset_audio_dir = dataset_path 
 
     if not dataset_audio_dir.exists():
         logger.error(f"Audio directory not found: {dataset_audio_dir}")
         return
 
     os.makedirs(dataset_audio_dir, exist_ok=True)
-    logger.info(f"Input directory: {dataset_audio_dir} (wav_depth={wav_depth})")
+    logger.info(f"Input directory: {dataset_audio_dir}")
 
     # Collect (audio_path, output_base_dir) for each file to process
-    if wav_depth == 2:
-        # Depth 2: dataset/audio/voice_id/<song_id>.wav -> output under dataset/audio/voice_id/<song_id>/
-        tasks = []
-        for voice_dir in sorted(dataset_audio_dir.iterdir()):
-            if not voice_dir.is_dir():
-                continue
-            for wav in voice_dir.glob("*.wav"):
-                tasks.append((wav, voice_dir))
-        logger.info(f"{len(tasks)} audio files to process (depth 2: voice_id/song_id)")
-    else:
-        # Depth 1: dataset/audio/*.wav -> output under dataset/audio/<track_name>/
-        audio_files = list(dataset_audio_dir.glob("*.wav"))
-        tasks = [(wav, dataset_audio_dir) for wav in audio_files]
-        logger.info(f"{len(tasks)} audio files to process (depth 1)")
+    # Depth 1: dataset/audio/*.wav -> output under dataset/audio/<track_name>/
+    audio_files = list(dataset_audio_dir.glob("*.wav"))
+    tasks = [(wav, dataset_audio_dir) for wav in audio_files]
+    logger.info(f"{len(tasks)} audio files to process")
 
     if not tasks:
         logger.warning("No audio files found to process")
@@ -168,13 +157,7 @@ def main(
 
     # Remove original wav files (depth 1: at audio/ root; depth 2: inside each voice_id dir)
     logger.info("Removing original wav files...")
-    if wav_depth == 1:
-        original_wavs = [
-            w for v in dataset_audio_dir.iterdir()
-            if v.is_dir() for w in v.glob("*.wav")
-        ]
-    else:
-        original_wavs = list(dataset_audio_dir.glob("*.wav"))
+    original_wavs = list(dataset_audio_dir.glob("*.wav"))
     removed_wav_count = 0
     for wav_file in original_wavs:
         try:
@@ -199,12 +182,6 @@ if __name__ == "__main__":
         "--dataset_path", required=True, help="Path to dataset directory containing audio/"
     )
     p.add_argument(
-        "--wav_depth",
-        type=int,
-        default=1,
-        help="Depth of the wav directory. Default is 1: audio/*.wav -> audio/<track_name>/chunks. 2: dataset/audio/<voice_id>/<song_id>.wav -> dataset/audio/<voice_id>/<song_id>/chunks.",
-    )
-    p.add_argument(
         "--min_silence_len", type=int, default=2000, help="ms of silence to split on"
     )
     p.add_argument(
@@ -216,6 +193,9 @@ if __name__ == "__main__":
     p.add_argument(
         "--min_segment_len", type=int, default=3000, help="ms minimum segment length"
     )
+    p.add_argument(
+        "--includes_audio_subdirs", action="store_true", help="Whether to include audio subdirectories in the output"
+    )
     args = p.parse_args()
 
     main(
@@ -224,6 +204,6 @@ if __name__ == "__main__":
         silence_thresh=args.silence_thresh,
         keep_silence=args.keep_silence,
         min_segment_len=args.min_segment_len,
-        wav_depth=args.wav_depth,
+        includes_audio_subdirs=args.includes_audio_subdirs
     )
 
