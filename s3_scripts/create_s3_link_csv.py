@@ -90,7 +90,7 @@ def main() -> None:
 
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["s3_uri"])
+    writer.writerow(["s3_link"])
     for uri in s3_uris:
         writer.writerow([uri])
 
