@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
 """
-Scan S3 prefixes for audio files and flag tracks that are "mostly silent".
+Flag S3-hosted audio tracks that are "mostly silent".
 
 A track is flagged when its silence fraction (proportion of total duration
 that is silent) meets or exceeds --silence-fraction (default 0.80), meaning
 less than 20% of the track contains audible content.
 
-Input CSV must have an 's3_prefix' column with one S3 URI prefix per row.
-Output CSV contains one row per audio file with silence metrics and a flag.
+By default the input CSV must have an 's3_link' column with one full S3 object
+URI per row (e.g. s3://bucket/path/to/track.wav). Each file is downloaded and
+analysed directly — no listing step.
 
-Usage example:
+Use --scan-prefixes if each row is instead an S3 prefix (folder) to list for
+audio files under that tree.
+
+Output CSV contains one row per analysed file with silence metrics and a flag.
+The 'prefix' column is the listing prefix when using --scan-prefixes; otherwise
+it is left empty.
+
+Usage example (explicit file URIs per row):
     python detect_silent_tracks.py \
-        --csv prefixes.csv \
+        --csv tracks.csv \
         --output-csv results.csv \
         --silence-thresh -40 \
         --silence-fraction 0.80 \
@@ -77,7 +85,7 @@ def list_audio_files_for_prefix(
     s3_prefix: str,
     extensions: Tuple[str, ...],
 ) -> List[str]:
-    """Return sorted S3 URIs under s3_prefix whose extension is in extensions."""
+    """Return sorted S3 URIs under s3_link whose extension is in extensions."""
     bucket, key_prefix = parse_s3(s3_prefix)
     list_prefix = normalize_list_prefix(key_prefix)
     uris: List[str] = []
@@ -110,6 +118,39 @@ def collect_all_tasks(
         logger.info("  Found %d file(s) under %s", len(uris), prefix)
         for uri in uris:
             tasks.append((uri, prefix))
+    return tasks
+
+
+def collect_tasks_from_explicit_uris(
+    links: List[str],
+    extensions: Tuple[str, ...],
+    logger: logging.Logger,
+) -> List[Tuple[str, str]]:
+    """Build (s3_uri, prefix) tasks from full-object S3 URIs; prefix is always ''."""
+    tasks: List[Tuple[str, str]] = []
+    skipped = 0
+    for raw in links:
+        uri = raw.strip()
+        if not uri:
+            continue
+        try:
+            _bucket, key = parse_s3(uri)
+        except ValueError as exc:
+            logger.warning("Skip invalid S3 URI %r: %s", uri, exc)
+            skipped += 1
+            continue
+        if key.endswith("/"):
+            logger.warning("Skip key that looks like a prefix (trailing /): %s", uri)
+            skipped += 1
+            continue
+        ext = Path(key).suffix.lower()
+        if ext not in extensions:
+            logger.warning("Skip %s (extension %r not in %s)", uri, ext, extensions)
+            skipped += 1
+            continue
+        tasks.append((uri, ""))
+    if skipped:
+        logger.info("Skipped %d row(s) (invalid URI, prefix-style key, or wrong extension).", skipped)
     return tasks
 
 
@@ -213,7 +254,9 @@ def write_results_csv(results: List[Dict[str, Any]], output_path: str) -> None:
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
-            "Scan S3 prefixes for audio files and flag tracks that are mostly silent. "
+            "Analyse S3 audio files and flag tracks that are mostly silent. "
+            "Default: CSV rows are full s3:// object URIs. "
+            "Optional --scan-prefixes: each row is a folder prefix to list. "
             "A track is flagged when its silence fraction >= --silence-fraction."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -222,7 +265,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--csv",
         required=True,
         dest="csv",
-        help="Path to input CSV with an 's3_prefix' column.",
+        help=(
+            "Path to input CSV with an 's3_link' column: full s3://.../file URIs per row "
+            "by default, or prefixes when --scan-prefixes is set."
+        ),
+    )
+    p.add_argument(
+        "--scan-prefixes",
+        action="store_true",
+        dest="scan_prefixes",
+        help=(
+            "Treat each s3_link as an S3 prefix (folder) and list audio files under it "
+            "instead of treating each row as a single object URI."
+        ),
     )
     p.add_argument(
         "--silence-thresh",
@@ -306,29 +361,34 @@ def main() -> None:
         for ext in args.file_extensions
     )
 
-    # Read S3 prefixes from input CSV.
-    prefixes: List[str] = []
+    # Read s3_link values from input CSV.
+    links: List[str] = []
     with open(args.csv, newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
-        if reader.fieldnames is None or "s3_prefix" not in reader.fieldnames:
-            logger.error("Input CSV must have an 's3_prefix' column.")
+        if reader.fieldnames is None or "s3_link" not in reader.fieldnames:
+            logger.error("Input CSV must have an 's3_link' column.")
             sys.exit(1)
         for row in reader:
-            prefix = (row.get("s3_prefix") or "").strip()
-            if prefix:
-                prefixes.append(prefix)
+            cell = (row.get("s3_link") or "").strip()
+            if cell:
+                links.append(cell)
 
-    if not prefixes:
-        logger.warning("No prefixes found in %s — nothing to do.", args.csv)
+    if not links:
+        logger.warning("No s3_link values found in %s — nothing to do.", args.csv)
         sys.exit(0)
 
-    logger.info("Loaded %d prefix(es) from %s", len(prefixes), args.csv)
+    mode = "prefix listing" if args.scan_prefixes else "explicit object URIs"
+    logger.info("Loaded %d row(s) from %s (%s)", len(links), args.csv, mode)
 
-    # Collect all (s3_uri, prefix) tasks via serial S3 listing.
-    all_tasks = collect_all_tasks(prefixes, extensions, logger)
+    if args.scan_prefixes:
+        all_tasks = collect_all_tasks(links, extensions, logger)
+        empty_msg = "No audio files found under any prefix — nothing to analyse."
+    else:
+        all_tasks = collect_tasks_from_explicit_uris(links, extensions, logger)
+        empty_msg = "No valid audio URIs to analyse — check extensions and s3:// format."
 
     if not all_tasks:
-        logger.warning("No audio files found under any prefix — nothing to analyse.")
+        logger.warning(empty_msg)
         sys.exit(0)
 
     logger.info(
