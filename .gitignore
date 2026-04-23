@@ -1,3 +1,8 @@
+# Python artifacts
+__pycache__/
+**/__pycache__/
+.venv/
+
 *.log
 *.txt
 *.csv
