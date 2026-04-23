@@ -37,6 +37,7 @@ import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import requests
 
 import boto3
 from tqdm import tqdm
@@ -60,6 +61,39 @@ FIELDNAMES = [
     "error",
 ]
 
+METADATA_BASE = "http://169.254.169.254/latest"
+
+# ---------------------------------------------------------------------------
+# IMDSv2 helpers
+# ---------------------------------------------------------------------------
+
+def get_imdsv2_token():
+    r = requests.put(
+        f"{METADATA_BASE}/api/token",
+        headers={
+            "X-aws-ec2-metadata-token-ttl-seconds": "21600"
+        },
+        timeout=2,
+    )
+    r.raise_for_status()
+    return r.text
+
+
+def metadata(path, token):
+    r = requests.get(
+        f"{METADATA_BASE}/meta-data/{path}",
+        headers={
+            "X-aws-ec2-metadata-token": token
+        },
+        timeout=2,
+    )
+    r.raise_for_status()
+    return r.text
+
+token = get_imdsv2_token()
+instance_id = metadata("instance-id", token)
+region = metadata("placement/region", token)
+ec2 = boto3.client("ec2", region_name=region)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -236,15 +270,33 @@ def analyze_audio_file(
 
 
 # ---------------------------------------------------------------------------
-# Output
+# Output / checkpoint helpers
 # ---------------------------------------------------------------------------
 
-def write_results_csv(results: List[Dict[str, Any]], output_path: str) -> None:
-    with open(output_path, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=FIELDNAMES, extrasaction="ignore")
+def load_completed_uris(output_path: str) -> set:
+    """Return the set of s3_uri values already present in output_path, or empty set."""
+    path = Path(output_path)
+    if not path.is_file():
+        return set()
+    completed: set = set()
+    with open(output_path, newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        if reader.fieldnames and "s3_uri" in reader.fieldnames:
+            for row in reader:
+                uri = (row.get("s3_uri") or "").strip()
+                if uri:
+                    completed.add(uri)
+    return completed
+
+
+def open_output_csv(output_path: str, append: bool):
+    """Open the output CSV for writing/appending and return (file_handle, writer)."""
+    mode = "a" if append else "w"
+    fh = open(output_path, mode, newline="", encoding="utf-8")
+    writer = csv.DictWriter(fh, fieldnames=FIELDNAMES, extrasaction="ignore")
+    if not append:
         writer.writeheader()
-        for row in results:
-            writer.writerow(row)
+    return fh, writer
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +382,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         dest="log_file",
         help="Optional path for a log file (written in addition to stderr).",
     )
+    p.add_argument(
+        "--stop-instance-on-completion",
+        action="store_true",
+        dest="stop_instance_on_completion",
+        help="Stop this EC2 instance after the job completes (or fails).",
+    )
     return p
 
 
@@ -391,6 +449,20 @@ def main() -> None:
         logger.warning(empty_msg)
         sys.exit(0)
 
+    # Resume: skip URIs already present in the output CSV.
+    completed_uris = load_completed_uris(args.output_csv)
+    if completed_uris:
+        before = len(all_tasks)
+        all_tasks = [(uri, pfx) for uri, pfx in all_tasks if uri not in completed_uris]
+        logger.info(
+            "Resuming: skipping %d already-completed URI(s), %d remaining.",
+            before - len(all_tasks),
+            len(all_tasks),
+        )
+        if not all_tasks:
+            logger.info("All tasks already completed — nothing left to do.")
+            sys.exit(0)
+
     logger.info(
         "Dispatching %d file(s) across %d worker(s) ...",
         len(all_tasks),
@@ -398,48 +470,53 @@ def main() -> None:
     )
 
     results: List[Dict[str, Any]] = []
+    appending = bool(completed_uris)
+    out_fh, out_writer = open_output_csv(args.output_csv, append=appending)
 
-    with ProcessPoolExecutor(max_workers=args.workers) as executor:
-        futures = {
-            executor.submit(
-                analyze_audio_file,
-                s3_uri,
-                prefix,
-                args.silence_thresh,
-                args.min_silence_len,
-                args.silence_fraction,
-                extensions,
-            ): s3_uri
-            for s3_uri, prefix in all_tasks
-        }
+    try:
+        with ProcessPoolExecutor(max_workers=args.workers) as executor:
+            futures = {
+                executor.submit(
+                    analyze_audio_file,
+                    s3_uri,
+                    prefix,
+                    args.silence_thresh,
+                    args.min_silence_len,
+                    args.silence_fraction,
+                    extensions,
+                ): s3_uri
+                for s3_uri, prefix in all_tasks
+            }
 
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Analysing"):
-            s3_uri = futures[future]
-            try:
-                result = future.result()
-            except Exception as exc:
-                # Belt-and-suspenders: worker should never raise, but handle anyway.
-                logger.error("Unexpected exception for %s: %s", s3_uri, exc)
-                result = {
-                    "s3_uri": s3_uri,
-                    "prefix": "",
-                    "total_duration_ms": None,
-                    "nonsilent_duration_ms": None,
-                    "silence_fraction": None,
-                    "is_flagged": None,
-                    "error": repr(exc),
-                }
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Analysing"):
+                s3_uri = futures[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    # Belt-and-suspenders: worker should never raise, but handle anyway.
+                    logger.error("Unexpected exception for %s: %s", s3_uri, exc)
+                    result = {
+                        "s3_uri": s3_uri,
+                        "prefix": "",
+                        "total_duration_ms": None,
+                        "nonsilent_duration_ms": None,
+                        "silence_fraction": None,
+                        "is_flagged": None,
+                        "error": repr(exc),
+                    }
 
-            results.append(result)
+                results.append(result)
+                out_writer.writerow(result)
+                out_fh.flush()
 
-            if result.get("is_flagged"):
-                logger.warning(
-                    "FLAGGED  silence=%.1f%%  %s",
-                    (result.get("silence_fraction") or 0) * 100,
-                    result["s3_uri"],
-                )
-
-    write_results_csv(results, args.output_csv)
+                if result.get("is_flagged"):
+                    logger.warning(
+                        "FLAGGED  silence=%.1f%%  %s",
+                        (result.get("silence_fraction") or 0) * 100,
+                        result["s3_uri"],
+                    )
+    finally:
+        out_fh.close()
 
     flagged = sum(1 for r in results if r.get("is_flagged") is True)
     errors = sum(1 for r in results if r.get("error"))
@@ -451,7 +528,15 @@ def main() -> None:
         errors,
     )
     logger.info("Results written to %s", args.output_csv)
+    if completed_uris:
+        logger.info("(Includes %d row(s) from previous run.)", len(completed_uris))
 
 
 if __name__ == "__main__":
-    main()
+    _stop_instance_on_completion = build_arg_parser().parse_args().stop_instance_on_completion
+    try:
+        main()
+    finally:
+        if _stop_instance_on_completion:
+            logging.getLogger(__name__).info("Stopping instance %s", instance_id)
+            ec2.stop_instances(InstanceIds=[instance_id])
